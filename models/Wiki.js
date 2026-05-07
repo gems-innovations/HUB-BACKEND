@@ -32,7 +32,11 @@ const wikiSchema = new mongoose.Schema({
   vistas: {
     type: Number,
     default: 0
-  }
+  },
+  linkedTickets: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Ticket'
+  }]
 }, {
   timestamps: true
 });

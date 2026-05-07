@@ -77,6 +77,7 @@ router.get('/', async (req, res) => {
       .populate('asignado_a', 'name email role')
       .populate('comentarios.autor', 'name email')
       .populate('dailyLogs.autor', 'name email avatar')
+      .populate('linkedTickets', 'subject ticketNumber status')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -104,7 +105,8 @@ router.get('/:id', async (req, res) => {
       .populate('cliente_id', 'nombre empresa email telefono')
       .populate('asignado_a', 'name email role avatar')
       .populate('comentarios.autor', 'name email avatar')
-      .populate('dailyLogs.autor', 'name email avatar');
+      .populate('dailyLogs.autor', 'name email avatar')
+      .populate('linkedTickets');
     
     if (!case_item) {
       return res.status(404).json({ error: 'Caso no encontrado' });
@@ -506,6 +508,54 @@ router.post('/:id/daily-logs', async (req, res) => {
   } catch (error) {
     console.error('Error adding daily log:', error);
     res.status(400).json({ error: 'Error al agregar el seguimiento diario' });
+  }
+});
+
+// POST - Vincular ticket a un caso
+router.post('/:id/tickets', async (req, res) => {
+  try {
+    const { ticketId } = req.body;
+    const case_item = await Case.findById(req.params.id);
+    
+    if (!case_item) return res.status(404).json({ error: 'Caso no encontrado' });
+    
+    if (!case_item.linkedTickets.includes(ticketId)) {
+      case_item.linkedTickets.push(ticketId);
+      await case_item.save();
+    }
+    
+    const populated = await Case.findById(case_item._id)
+      .populate('cliente_id', 'nombre empresa email')
+      .populate('asignado_a', 'name email role avatar')
+      .populate('comentarios.autor', 'name email avatar')
+      .populate('dailyLogs.autor', 'name email avatar')
+      .populate('linkedTickets');
+      
+    res.json(populated);
+  } catch (error) {
+    res.status(400).json({ error: 'Error al vincular ticket' });
+  }
+});
+
+// DELETE - Desvincular ticket de un caso
+router.delete('/:id/tickets/:ticketId', async (req, res) => {
+  try {
+    const case_item = await Case.findById(req.params.id);
+    if (!case_item) return res.status(404).json({ error: 'Caso no encontrado' });
+    
+    case_item.linkedTickets = case_item.linkedTickets.filter(id => id.toString() !== req.params.ticketId);
+    await case_item.save();
+    
+    const populated = await Case.findById(case_item._id)
+      .populate('cliente_id', 'nombre empresa email')
+      .populate('asignado_a', 'name email role avatar')
+      .populate('comentarios.autor', 'name email avatar')
+      .populate('dailyLogs.autor', 'name email avatar')
+      .populate('linkedTickets');
+      
+    res.json(populated);
+  } catch (error) {
+    res.status(400).json({ error: 'Error al desvincular ticket' });
   }
 });
 

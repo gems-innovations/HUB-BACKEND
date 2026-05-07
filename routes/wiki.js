@@ -33,7 +33,10 @@ router.get('/', async (req, res) => {
         { tags: { $in: [new RegExp(search, 'i')] } }
       ];
     }
-    const articles = await Wiki.find(query).populate('autor', 'name email').sort({ updatedAt: -1 });
+    const articles = await Wiki.find(query)
+      .populate('autor', 'name email')
+      .populate('linkedTickets', 'subject ticketNumber status')
+      .sort({ updatedAt: -1 });
     res.json(articles);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -43,7 +46,9 @@ router.get('/', async (req, res) => {
 // Obtener un artículo por ID
 router.get('/:id', async (req, res) => {
   try {
-    const article = await Wiki.findById(req.params.id).populate('autor', 'name email');
+    const article = await Wiki.findById(req.params.id)
+      .populate('autor', 'name email')
+      .populate('linkedTickets');
     if (!article) return res.status(404).json({ message: 'Artículo no encontrado' });
     article.vistas += 1;
     await article.save();
@@ -104,6 +109,47 @@ router.delete('/:id', async (req, res) => {
     res.json({ message: 'Artículo eliminado' });
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// POST - Vincular ticket a un artículo de wiki
+router.post('/:id/tickets', async (req, res) => {
+  try {
+    const { ticketId } = req.body;
+    const wiki = await Wiki.findById(req.params.id);
+    if (!wiki) return res.status(404).json({ message: 'Artículo no encontrado' });
+    
+    if (!wiki.linkedTickets.includes(ticketId)) {
+      wiki.linkedTickets.push(ticketId);
+      await wiki.save();
+    }
+    
+    const populated = await Wiki.findById(wiki._id)
+      .populate('autor', 'name email')
+      .populate('linkedTickets');
+      
+    res.json(populated);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// DELETE - Desvincular ticket de un artículo de wiki
+router.delete('/:id/tickets/:ticketId', async (req, res) => {
+  try {
+    const wiki = await Wiki.findById(req.params.id);
+    if (!wiki) return res.status(404).json({ message: 'Artículo no encontrado' });
+    
+    wiki.linkedTickets = wiki.linkedTickets.filter(id => id.toString() !== req.params.ticketId);
+    await wiki.save();
+    
+    const populated = await Wiki.findById(wiki._id)
+      .populate('autor', 'name email')
+      .populate('linkedTickets');
+      
+    res.json(populated);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
   }
 });
 

@@ -130,6 +130,11 @@ const CaseSchema = new mongoose.Schema({
     }
   }],
 
+  linkedTickets: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Ticket'
+  }],
+
   createdAt: { 
     type: Date, 
     default: Date.now 
