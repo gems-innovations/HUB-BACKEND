@@ -6,6 +6,7 @@ const fs = require('fs');
 const Task = require('../models/Task');
 const Board = require('../models/Board');
 const { authenticateToken } = require('../middleware/auth');
+const { notifyMentions, notifyAssignment, notifyComment } = require('../services/notificationHelpers');
 
 // Configuración de multer para imágenes de comentarios en tareas
 const taskCommentsUploadDir = path.join(__dirname, '..', 'uploads', 'task-comments');
@@ -181,18 +182,27 @@ router.get('/github/branch/:branch', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
-    
+
     const taskData = {
       ...req.body,
       createdBy: userId
     };
-    
+
     const task = new Task(taskData);
     await task.save();
-    
+
     await task.populate('assignedTo', 'name email photo role');
     await task.populate('createdBy', 'name email photo');
-    
+
+    // Notificación: asignación al crear tarea
+    notifyAssignment({
+      assignedTo: task.assignedTo?._id || task.assignedTo,
+      entityType: 'task',
+      entityId: task._id,
+      entityTitle: task.title,
+      fromUserId: userId
+    });
+
     res.status(201).json(task);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -304,6 +314,23 @@ router.post('/:id/comments', taskCommentImageUpload.array('images', 10), async (
 
     await task.addComment(userId, text, images);
     await task.populate('comments.userId', 'name email photo');
+
+    // Notificaciones: menciones + comentario para el asignado
+    notifyMentions({
+      text,
+      entityType: 'task',
+      entityId: task._id,
+      entityTitle: task.title,
+      fromUserId: userId
+    });
+    notifyComment({
+      recipients: task.assignedTo ? [task.assignedTo] : [],
+      entityType: 'task',
+      entityId: task._id,
+      entityTitle: task.title,
+      fromUserId: userId,
+      snippet: (text || '').slice(0, 80)
+    });
 
     res.json(task);
   } catch (error) {

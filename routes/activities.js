@@ -6,6 +6,7 @@ const fs = require('fs');
 const Activity = require('../models/Activity');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
+const { notifyMentions, notifyAssignment, notifyComment } = require('../services/notificationHelpers');
 
 // Configuración de multer para imágenes de comentarios
 const commentsUploadDir = path.join(__dirname, '..', 'uploads', 'activity-comments');
@@ -53,13 +54,22 @@ const getStatusText = (status) => {
 };
 
 // Crear nueva actividad
-router.post('/', async (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
   console.log('🚀 [ACTIVITIES] Iniciando creación de nueva actividad');
   console.log('📝 [ACTIVITIES] Datos recibidos:', JSON.stringify(req.body, null, 2));
 
   try {
     const activity = new Activity(req.body);
     await activity.save();
+
+    // Notificación: asignación al crear la actividad
+    notifyAssignment({
+      assignedTo: activity.assignedTo,
+      entityType: 'activity',
+      entityId: activity._id,
+      entityTitle: activity.title,
+      fromUserId: req.user?._id || req.user?.id
+    });
 
     console.log('✅ [ACTIVITIES] Activity saved with ID:', activity._id);
     console.log('👤 [ACTIVITIES] Saved assignedTo:', activity.assignedTo);
@@ -334,10 +344,10 @@ router.patch('/:id/status', async (req, res) => {
 });
 
 // Reasignar actividad
-router.patch('/:id/assign', async (req, res) => {
+router.patch('/:id/assign', authenticateToken, async (req, res) => {
   try {
     const { assignedTo } = req.body;
-    
+
     // Verificar que el usuario existe
     if (assignedTo) {
       const user = await User.findById(assignedTo);
@@ -345,7 +355,7 @@ router.patch('/:id/assign', async (req, res) => {
         return res.status(404).json({ error: 'Usuario no encontrado' });
       }
     }
-    
+
     const activity = await Activity.findByIdAndUpdate(
       req.params.id,
       { assignedTo, updatedAt: new Date() },
@@ -358,7 +368,16 @@ router.patch('/:id/assign', async (req, res) => {
     if (!activity) {
       return res.status(404).json({ error: 'Actividad no encontrada' });
     }
-    
+
+    // Notificar nueva asignación
+    notifyAssignment({
+      assignedTo: activity.assignedTo,
+      entityType: 'activity',
+      entityId: activity._id,
+      entityTitle: activity.title,
+      fromUserId: req.user?._id || req.user?.id
+    });
+
     res.json(activity);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -470,6 +489,23 @@ router.post(
 
       activity.comments.push({ userId, text, images, createdAt: new Date() });
       await activity.save();
+
+      // Notificaciones: menciones + comentario general a otros asignados
+      notifyMentions({
+        text,
+        entityType: 'activity',
+        entityId: activity._id,
+        entityTitle: activity.title,
+        fromUserId: userId
+      });
+      notifyComment({
+        recipients: activity.assignedTo || [],
+        entityType: 'activity',
+        entityId: activity._id,
+        entityTitle: activity.title,
+        fromUserId: userId,
+        snippet: text.slice(0, 80)
+      });
 
       const populated = await Activity.findById(activity._id)
         .populate('clientId', 'name email company')
