@@ -188,14 +188,15 @@ const TaskSchema = new mongoose.Schema({
   
   // Comentarios y actividad
   comments: [{
-    userId: { 
-      type: mongoose.Schema.Types.ObjectId, 
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
     },
     text: String,
-    createdAt: { 
-      type: Date, 
-      default: Date.now 
+    images: [{ url: String, name: String }],
+    createdAt: {
+      type: Date,
+      default: Date.now
     }
   }],
   
@@ -283,8 +284,8 @@ TaskSchema.pre('save', function(next) {
 });
 
 // Métodos de instancia
-TaskSchema.methods.addComment = function(userId, text) {
-  this.comments.push({ userId, text });
+TaskSchema.methods.addComment = function(userId, text, images = []) {
+  this.comments.push({ userId, text, images });
   return this.save();
 };
 

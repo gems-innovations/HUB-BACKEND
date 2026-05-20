@@ -1,8 +1,34 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const Task = require('../models/Task');
 const Board = require('../models/Board');
 const { authenticateToken } = require('../middleware/auth');
+
+// Configuración de multer para imágenes de comentarios en tareas
+const taskCommentsUploadDir = path.join(__dirname, '..', 'uploads', 'task-comments');
+if (!fs.existsSync(taskCommentsUploadDir)) {
+  fs.mkdirSync(taskCommentsUploadDir, { recursive: true });
+}
+const taskCommentImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, taskCommentsUploadDir),
+  filename: (req, file, cb) => {
+    const safeExt = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `task-comment-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+  }
+});
+const taskCommentImageUpload = multer({
+  storage: taskCommentImageStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Solo se permiten imágenes'), false);
+    }
+    cb(null, true);
+  }
+});
 
 // Aplicar autenticación a todas las rutas
 router.use(authenticateToken);
@@ -253,21 +279,31 @@ router.patch('/:id/move', async (req, res) => {
   }
 });
 
-// Agregar comentario a tarea
-router.post('/:id/comments', async (req, res) => {
+// Agregar comentario a tarea (soporta texto y/o imágenes via multipart)
+router.post('/:id/comments', taskCommentImageUpload.array('images', 10), async (req, res) => {
   try {
-    const { text } = req.body;
+    const text = (req.body?.text || '').toString();
     const userId = req.user.id || req.user._id;
-    
+    const files = req.files || [];
+
+    if (!text.trim() && files.length === 0) {
+      return res.status(400).json({ error: 'El comentario no puede estar vacío' });
+    }
+
     const task = await Task.findById(req.params.id);
-    
     if (!task) {
       return res.status(404).json({ error: 'Tarea no encontrada' });
     }
-    
-    await task.addComment(userId, text);
+
+    const host = `${req.protocol}://${req.get('host')}`;
+    const images = files.map(f => ({
+      url: `${host}/uploads/task-comments/${f.filename}`,
+      name: f.originalname
+    }));
+
+    await task.addComment(userId, text, images);
     await task.populate('comments.userId', 'name email photo');
-    
+
     res.json(task);
   } catch (error) {
     res.status(400).json({ error: error.message });

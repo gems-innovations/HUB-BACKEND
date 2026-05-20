@@ -1,7 +1,34 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const Activity = require('../models/Activity');
 const User = require('../models/User');
+const { authenticateToken } = require('../middleware/auth');
+
+// Configuración de multer para imágenes de comentarios
+const commentsUploadDir = path.join(__dirname, '..', 'uploads', 'activity-comments');
+if (!fs.existsSync(commentsUploadDir)) {
+  fs.mkdirSync(commentsUploadDir, { recursive: true });
+}
+const commentImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, commentsUploadDir),
+  filename: (req, file, cb) => {
+    const safeExt = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `comment-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+  }
+});
+const commentImageUpload = multer({
+  storage: commentImageStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB por imagen
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Solo se permiten imágenes'), false);
+    }
+    cb(null, true);
+  }
+});
 
 // Funciones helper para formatear texto en WhatsApp
 const getPriorityText = (priority) => {
@@ -392,5 +419,51 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ==================== COMENTARIOS ====================
+
+// Agregar comentario a una actividad (soporta texto + imágenes via multipart)
+router.post(
+  '/:id/comments',
+  authenticateToken,
+  commentImageUpload.array('images', 10),
+  async (req, res) => {
+    try {
+      const userId = req.user?._id || req.user?.id;
+      if (!userId) return res.status(401).json({ error: 'Usuario no autenticado' });
+
+      const text = (req.body?.text || '').toString();
+      const files = req.files || [];
+
+      if (!text.trim() && files.length === 0) {
+        return res.status(400).json({ error: 'El comentario no puede estar vacío' });
+      }
+
+      const activity = await Activity.findById(req.params.id);
+      if (!activity) return res.status(404).json({ error: 'Actividad no encontrada' });
+
+      // Construir URLs públicas de las imágenes
+      const host = `${req.protocol}://${req.get('host')}`;
+      const images = files.map(f => ({
+        url: `${host}/uploads/activity-comments/${f.filename}`,
+        name: f.originalname
+      }));
+
+      activity.comments.push({ userId, text, images, createdAt: new Date() });
+      await activity.save();
+
+      const populated = await Activity.findById(activity._id)
+        .populate('clientId', 'name email company')
+        .populate('assignedTo', 'name email role photo phone avatar')
+        .populate('createdBy', 'name email')
+        .populate('comments.userId', 'name email photo');
+
+      res.json(populated);
+    } catch (error) {
+      console.error('Error agregando comentario a actividad:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 module.exports = router;
