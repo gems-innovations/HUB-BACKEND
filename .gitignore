@@ -64,3 +64,15 @@ temp/
 
 # Scratch / debug scripts con credenciales — no subir
 scratch/
+
+# Dev scripts que loguean MONGO_URI / passwords — no subir
+test-connection.js
+test-github-setup.js
+test-github-simple.js
+test-github-token.js
+create-test-users.js
+check-users.js
+debug-permissions.js
+fix-user-permissions.js
+setup-users.js
+update-user-permissions.js

@@ -39,10 +39,13 @@ router.get('/organizations', async (req, res) => {
     const { status, q } = req.query;
     const filter = {};
     if (status) filter.status = status;
-    if (q) filter.$or = [
-      { name: { $regex: q, $options: 'i' } },
-      { slug: { $regex: q, $options: 'i' } }
-    ];
+    if (q) {
+      const safe = escapeRegex(q);
+      filter.$or = [
+        { name: { $regex: safe, $options: 'i' } },
+        { slug: { $regex: safe, $options: 'i' } }
+      ];
+    }
 
     const orgs = await runWithoutTenant(() =>
       Organization.find(filter).sort({ createdAt: -1 }).lean()

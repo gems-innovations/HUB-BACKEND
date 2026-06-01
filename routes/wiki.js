@@ -5,6 +5,8 @@ const path = require('path');
 const fs = require('fs');
 const Wiki = require('../models/Wiki');
 
+function escapeRegex(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
 // Configuración de multer
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -27,10 +29,11 @@ router.get('/', async (req, res) => {
     let query = {};
     if (categoria) query.categoria = categoria;
     if (search) {
+      const safe = escapeRegex(search);
       query.$or = [
-        { titulo: { $regex: search, $options: 'i' } },
-        { descripcion: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } }
+        { titulo: { $regex: safe, $options: 'i' } },
+        { descripcion: { $regex: safe, $options: 'i' } },
+        { tags: { $in: [new RegExp(safe, 'i')] } }
       ];
     }
     const articles = await Wiki.find(query)

@@ -86,7 +86,8 @@ router.post('/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    if (!name || !email || !password) {
+    if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string'
+        || !name.trim() || !email.trim() || !password) {
       return res.status(400).json({ success: false, message: 'Nombre, email y contraseña son requeridos' });
     }
     if (password.length < 8) {
@@ -152,7 +153,9 @@ router.post('/register-org', async (req, res) => {
   try {
     const { orgName, userName, email, password } = req.body;
 
-    if (!orgName || !userName || !email || !password) {
+    if (typeof orgName !== 'string' || typeof userName !== 'string'
+        || typeof email !== 'string' || typeof password !== 'string'
+        || !orgName.trim() || !userName.trim() || !email.trim() || !password) {
       return res.status(400).json({ success: false, message: 'Todos los campos son requeridos' });
     }
     if (password.length < 8) {
@@ -251,7 +254,10 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    // Validación estricta de tipo — mongo-sanitize ya neutraliza operadores como $ne,
+    // pero un atacante puede mandar email/password como objeto/array. Sin este check,
+    // .trim() / .toLowerCase() abajo crashearían con 500 (DoS leve + log noise).
+    if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) {
       return res.status(400).json({ success: false, message: 'Email y contraseña son requeridos' });
     }
 
