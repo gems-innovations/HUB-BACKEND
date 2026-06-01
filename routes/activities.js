@@ -7,6 +7,7 @@ const Activity = require('../models/Activity');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 const { notifyMentions, notifyAssignment, notifyComment } = require('../services/notificationHelpers');
+const { notifyTaskAssigned } = require('../services/emailService');
 
 // Configuración de multer para imágenes de comentarios
 const commentsUploadDir = path.join(__dirname, '..', 'uploads', 'activity-comments');
@@ -37,7 +38,8 @@ router.post('/', authenticateToken, async (req, res) => {
   console.log('📝 [ACTIVITIES] Datos recibidos:', JSON.stringify(req.body, null, 2));
 
   try {
-    const activity = new Activity(req.body);
+    const userId = req.user?._id || req.user?.id;
+    const activity = new Activity({ ...req.body, createdBy: userId });
     await activity.save();
 
     // Notificación: asignación al crear la actividad
@@ -46,7 +48,7 @@ router.post('/', authenticateToken, async (req, res) => {
       entityType: 'activity',
       entityId: activity._id,
       entityTitle: activity.title,
-      fromUserId: req.user?._id || req.user?.id
+      fromUserId: userId
     });
 
     console.log('✅ [ACTIVITIES] Activity saved with ID:', activity._id);
@@ -57,6 +59,17 @@ router.post('/', authenticateToken, async (req, res) => {
       .populate('clientId', 'name email company')
       .populate('assignedTo', 'name email role photo phone avatar')
       .populate('createdBy', 'name email');
+
+    // Notificación por email a los asignados
+    const assignees = Array.isArray(populatedActivity.assignedTo)
+      ? populatedActivity.assignedTo.filter(Boolean)
+      : [];
+    console.log('[Activity] Email notify | assignedTo count:', assignees.length, '| createdBy:', populatedActivity.createdBy?.email);
+    if (assignees.length) {
+      notifyTaskAssigned(populatedActivity, populatedActivity.createdBy).catch(err =>
+        console.error('[Email] notifyTaskAssigned (activity) error:', err.message)
+      );
+    }
 
     console.log('✅ [ACTIVITIES] Actividad creada exitosamente');
     res.json(populatedActivity);
