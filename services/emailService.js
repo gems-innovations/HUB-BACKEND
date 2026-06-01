@@ -13,6 +13,9 @@ function getTransporter() {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
       },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     });
   }
   return transporter;
@@ -25,16 +28,30 @@ async function sendMail({ to, subject, html, text }) {
   const pass = process.env.SMTP_PASS;
 
   if (!host || !user || !pass) {
-    console.warn('[Email] Skipping: Missing config:', { 
-      host: host ? 'OK' : 'MISSING', 
-      user: user ? 'OK' : 'MISSING', 
-      pass: pass ? 'OK' : 'MISSING' 
+    console.warn('[Email] Skipping: Missing config:', {
+      host: host ? 'OK' : 'MISSING',
+      user: user ? 'OK' : 'MISSING',
+      pass: pass ? 'OK' : 'MISSING'
     });
     return null;
   }
+
+  console.log('[Email] Attempting sendMail to:', to);
+
+  // Crear transporter fresco por envío para evitar conexiones colgadas
+  const t = nodemailer.createTransport({
+    host,
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: { user, pass },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
+  });
+
   try {
-    const info = await getTransporter().sendMail({
-      from: process.env.EMAIL_FROM || `"CRM Soporte" <${process.env.SMTP_USER}>`,
+    const info = await t.sendMail({
+      from: process.env.EMAIL_FROM || `"GEMS Hub" <${user}>`,
       to,
       subject,
       html,
@@ -43,8 +60,10 @@ async function sendMail({ to, subject, html, text }) {
     console.log('[Email] Sent to', to, '| messageId:', info.messageId);
     return info;
   } catch (err) {
-    console.error('[Email] Error sending to', to, '–', err.message);
+    console.error('[Email] Error sending to', to, '–', err.message, err.code || '');
     return null;
+  } finally {
+    t.close();
   }
 }
 
