@@ -49,7 +49,8 @@ const organizationSchema = new mongoose.Schema({
     country: { type: String, default: null }
   },
   limits: {
-    maxUsers: { type: Number, default: 0 }, // 0 = ilimitado
+    maxUsers:     { type: Number, default: 0 }, // 0 = ilimitado
+    maxTasks:     { type: Number, default: 0 }, // 0 = ilimitado
     maxStorageMb: { type: Number, default: 0 }
   },
   createdBy: {

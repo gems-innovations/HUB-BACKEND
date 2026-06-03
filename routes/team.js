@@ -9,6 +9,7 @@ const Activity = require('../models/Activity');
 const Case = require('../models/Case');
 const Ticket = require('../models/Ticket');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { checkUserLimit } = require('../middleware/planLimits');
 
 // Middleware de autenticación para todas las rutas
 router.use(authenticateToken);
@@ -97,7 +98,7 @@ router.get('/', checkTeamPermissions('view'), async (req, res) => {
 });
 
 // Crear nuevo miembro del equipo (usuario)
-router.post('/', checkTeamPermissions('create'), async (req, res) => {
+router.post('/', checkTeamPermissions('create'), checkUserLimit, async (req, res) => {
   try {
     const { name, email, password, role, department, departmentRole, supervisor, position, phone } = req.body;
     

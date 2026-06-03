@@ -200,7 +200,8 @@ router.post('/register-org', async (req, res) => {
       slug,
       plan: 'free_trial',
       trialExpiresAt,
-      createdBy: user._id
+      createdBy: user._id,
+      limits: { maxUsers: 5, maxTasks: 50 }   // plan gratuito
     });
 
     // Create Membership as Owner

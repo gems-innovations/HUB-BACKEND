@@ -8,6 +8,7 @@ const Board = require('../models/Board');
 const { authenticateToken } = require('../middleware/auth');
 const { notifyMentions, notifyAssignment, notifyComment } = require('../services/notificationHelpers');
 const { notifyTaskAssigned, notifyMentionEmail } = require('../services/emailService');
+const { checkTaskLimit } = require('../middleware/planLimits');
 
 // Configuración de multer para imágenes de comentarios en tareas
 const taskCommentsUploadDir = path.join(__dirname, '..', 'uploads', 'task-comments');
@@ -180,7 +181,7 @@ router.get('/github/branch/:branch', async (req, res) => {
 });
 
 // Crear nueva tarea
-router.post('/', async (req, res) => {
+router.post('/', checkTaskLimit, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
 
