@@ -7,7 +7,7 @@ const Task = require('../models/Task');
 const Board = require('../models/Board');
 const { authenticateToken } = require('../middleware/auth');
 const { notifyMentions, notifyAssignment, notifyComment } = require('../services/notificationHelpers');
-const { notifyTaskAssigned } = require('../services/emailService');
+const { notifyTaskAssigned, notifyMentionEmail } = require('../services/emailService');
 
 // Configuración de multer para imágenes de comentarios en tareas
 const taskCommentsUploadDir = path.join(__dirname, '..', 'uploads', 'task-comments');
@@ -332,6 +332,13 @@ router.post('/:id/comments', taskCommentImageUpload.array('images', 10), async (
       entityId: task._id,
       entityTitle: task.title,
       fromUserId: userId
+    });
+    notifyMentionEmail({
+      text,
+      sender: req.user,
+      resourceTitle: task.title,
+      resourceType: 'task',
+      resourceId: task._id,
     });
     notifyComment({
       recipients: task.assignedTo ? [task.assignedTo] : [],

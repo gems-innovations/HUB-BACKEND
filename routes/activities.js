@@ -7,7 +7,7 @@ const Activity = require('../models/Activity');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 const { notifyMentions, notifyAssignment, notifyComment } = require('../services/notificationHelpers');
-const { notifyTaskAssigned } = require('../services/emailService');
+const { notifyTaskAssigned, notifyMentionEmail } = require('../services/emailService');
 
 // Configuración de multer para imágenes de comentarios
 const commentsUploadDir = path.join(__dirname, '..', 'uploads', 'activity-comments');
@@ -376,6 +376,13 @@ router.post(
         entityId: activity._id,
         entityTitle: activity.title,
         fromUserId: userId
+      });
+      notifyMentionEmail({
+        text,
+        sender: req.user,
+        resourceTitle: activity.title,
+        resourceType: 'activity',
+        resourceId: activity._id,
       });
       notifyComment({
         recipients: activity.assignedTo || [],
