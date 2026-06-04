@@ -1,0 +1,46 @@
+services:
+  api:
+    image: ghcr.io/${GITHUB_REPOSITORY}:latest
+    container_name: hub-backend
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      PORT: ${PORT:-4000}
+      MONGO_URI: ${MONGO_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      APP_URL: ${APP_URL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      EMAIL_FROM: ${EMAIL_FROM}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      WPP_SESSION_PATH: ${WPP_SESSION_PATH:-/app/wpp-sessions}
+    volumes:
+      - uploads_data:/app/uploads
+      - wpp_sessions:/app/wpp-sessions
+    networks:
+      - hub-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  uploads_data:
+  wpp_sessions:
+
+networks:
+  hub-net:
+    driver: bridge
