@@ -22,6 +22,8 @@ const http = require('http');
 const socketIo = require('socket.io');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { RedisStore } = require('rate-limit-redis');
+const Redis = require('ioredis');
 const mongoSanitize = require('express-mongo-sanitize');
 const hpp = require('hpp');
 const { tenantContextMiddleware } = require('./services/tenantContext');
@@ -68,43 +70,136 @@ app.use(mongoSanitize());
 // Bloquea HTTP Parameter Pollution (?role=admin&role=user)
 app.use(hpp());
 
+// ───── Redis para rate limiting distribuido ─────
+// Si REDIS_URL no está configurado, cae en memoria (solo para dev local).
+let redisClient = null;
+let redisReady = false;
+
+if (process.env.REDIS_URL) {
+  redisClient = new Redis(process.env.REDIS_URL, {
+    enableOfflineQueue: false,   // no acumular comandos si Redis está caído
+    maxRetriesPerRequest: 1,
+    connectTimeout: 5000,
+    lazyConnect: false,
+  });
+  redisClient.on('connect', () => {
+    redisReady = true;
+    console.log('[Redis] Conectado — rate limiting persistente activo');
+  });
+  redisClient.on('error', (err) => {
+    redisReady = false;
+    console.error('[Redis] Error de conexión:', err.message);
+  });
+  redisClient.on('close', () => {
+    redisReady = false;
+  });
+} else {
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('[Rate limit] ADVERTENCIA: REDIS_URL no configurado — usando memoria (no persiste entre reinicios)');
+  }
+}
+
+// Construye un RedisStore si Redis está disponible, o undefined para usar memoria.
+// sendCommand tiene try/catch: si Redis cae en runtime, el limiter usa passOnStoreError
+// y deja pasar la petición en lugar de romper el servidor.
+function makeStore(prefix) {
+  if (!redisClient) return undefined;
+  return new RedisStore({
+    sendCommand: async (...args) => {
+      if (!redisReady) throw new Error('Redis no disponible');
+      return redisClient.call(...args);
+    },
+    prefix,
+  });
+}
+
+// ───── Middleware: verificar si la IP está baneada ─────
+// Cuando un limiter supera su cuota, escribe ban:<ip> en Redis con TTL de 1h.
+// Esta comprobación corre ANTES de los limiters.
+async function banCheckMiddleware(req, res, next) {
+  if (!redisClient || !redisReady) return next();
+  try {
+    const ttl = await redisClient.ttl(`ban:${req.ip}`);
+    if (ttl > 0) {
+      const minutosRestantes = Math.ceil(ttl / 60);
+      return res.status(429).json({
+        success: false,
+        message: `IP bloqueada por exceso de solicitudes. Intenta de nuevo en ${minutosRestantes} minuto(s).`,
+        retryAfter: ttl,
+      });
+    }
+  } catch (_) { /* Si Redis falla, dejamos pasar */ }
+  next();
+}
+
+// Escribe el ban en Redis (1 hora). Llamado desde los handlers de los limiters.
+async function banIp(ip) {
+  if (!redisClient || !redisReady) return;
+  try {
+    await redisClient.set(`ban:${ip}`, '1', 'EX', 3600);
+  } catch (_) { /* ignorar fallos de Redis */ }
+}
+
 // ───── Rate limiting ─────
+// General: 50 req/min por IP. Si se supera → ban de 1 hora en Redis.
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 600, // 600 reqs / 15 min por IP (suficiente para SPA activa)
+  windowMs: 60 * 1000,          // ventana de 1 minuto
+  max: 50,                       // 50 solicitudes por minuto
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, message: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.' }
+  passOnStoreError: true,        // si Redis falla, deja pasar en lugar de romper
+  store: makeStore('rl:gen:'),
+  handler: async (req, res) => {
+    await banIp(req.ip);
+    res.status(429).json({
+      success: false,
+      message: 'Has excedido el límite de solicitudes. Tu IP ha sido bloqueada por 1 hora.',
+    });
+  },
 });
 
+// Auth: 10 intentos fallidos/15min → ban de 1 hora.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20, // 20 intentos de login/registro por IP cada 15 min
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  message: { success: false, message: 'Demasiados intentos. Intenta más tarde.' }
+  skipSuccessfulRequests: true,  // no penaliza logins correctos
+  passOnStoreError: true,
+  store: makeStore('rl:auth:'),
+  handler: async (req, res) => {
+    await banIp(req.ip);
+    res.status(429).json({
+      success: false,
+      message: 'Demasiados intentos fallidos. Tu IP ha sido bloqueada por 1 hora.',
+    });
+  },
 });
 
-// Refresh tokens corren cada ~15min por sesión activa. Con muchas pestañas / múltiples
-// usuarios detrás de NAT, no podemos meterlos en el authLimiter (los lockoutearía).
+// Refresh tokens: alta frecuencia legítima (múltiples pestañas / NAT compartido).
 const refreshLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, message: 'Demasiadas renovaciones de sesión.' }
+  passOnStoreError: true,
+  store: makeStore('rl:refresh:'),
+  message: { success: false, message: 'Demasiadas renovaciones de sesión.' },
 });
 
 // Self-service onboarding: estricto contra spam de organizaciones.
 const registerOrgLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hora
+  windowMs: 60 * 60 * 1000,    // 1 hora
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, message: 'Demasiados intentos de registro. Intenta en 1 hora.' }
+  passOnStoreError: true,
+  store: makeStore('rl:regorgs:'),
+  message: { success: false, message: 'Demasiados intentos de registro. Intenta en 1 hora.' },
 });
 
+// Primero verificamos bans, luego aplicamos el limiter por ventana.
+app.use('/api/', banCheckMiddleware);
 app.use('/api/', generalLimiter);
 
 // Socket.IO CORS: usa la misma allowlist
