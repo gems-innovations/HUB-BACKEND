@@ -1,7 +1,8 @@
 # Stage 1 — deps (cached unless package.json changes)
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package*.json ./
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+COPY package*.json .npmrc ./
 RUN npm ci --omit=dev
 
 # Stage 2 — runtime image
