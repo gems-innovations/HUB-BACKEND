@@ -120,7 +120,8 @@ router.post('/organizations', async (req, res) => {
             email: ownerEmail.trim().toLowerCase(),
             password: ownerPassword,
             role: 'admin',
-            isActive: true
+            isActive: true,
+            isVerified: true
           });
         }
 
