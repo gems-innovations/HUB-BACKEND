@@ -286,8 +286,6 @@ app.post('/api/seed/trial-expired', async (req, res) => {
     const User = require('./models/User');
     const Membership = require('./models/Membership');
     const { runWithoutTenant } = require('./services/tenantContext');
-    const bcrypt = require('bcryptjs');
-
     const EMAIL = 'trial-vencido@gemsinnovations.com';
     const PASSWORD = 'GemsTrial2024!';
     const SLUG = 'agencia-demo-vencida';
@@ -312,12 +310,11 @@ app.post('/api/seed/trial-expired', async (req, res) => {
         branding: { displayName: 'Agencia Demo Vencida', primaryColor: '#6366f1' }
       });
 
-      // Crear usuario verificado
-      const hash = await bcrypt.hash(PASSWORD, 10);
+      // Crear usuario verificado (el modelo hashea la contraseña via pre-save)
       const user = await User.create({
         name: 'Admin Demo',
         email: EMAIL,
-        password: hash,
+        password: PASSWORD,
         role: 'admin',
         isActive: true,
         isVerified: true
