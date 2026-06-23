@@ -154,7 +154,7 @@ router.post('/organizations', async (req, res) => {
 router.patch('/organizations/:id', async (req, res) => {
   try {
     const updates = {};
-    const allowed = ['name', 'plan', 'status', 'contact', 'branding', 'limits'];
+    const allowed = ['name', 'plan', 'status', 'contact', 'branding', 'limits', 'trialExpiresAt'];
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];
     }
