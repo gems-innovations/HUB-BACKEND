@@ -276,6 +276,70 @@ app.use('/api/auth/refresh', refreshLimiter);
 app.use('/api/auth/register-org', registerOrgLimiter);
 app.use('/api/auth', authLimiter, authRoutes);
 
+// ───── Endpoint temporal de seed (solo dev) ─────
+app.post('/api/seed/trial-expired', async (req, res) => {
+  if (req.headers['x-seed-key'] !== 'gems-seed-2024') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const Organization = require('./models/Organization');
+    const User = require('./models/User');
+    const Membership = require('./models/Membership');
+    const { runWithoutTenant } = require('./services/tenantContext');
+    const bcrypt = require('bcryptjs');
+
+    const EMAIL = 'trial-vencido@gemsinnovations.com';
+    const PASSWORD = 'GemsTrial2024!';
+    const SLUG = 'agencia-demo-vencida';
+
+    await runWithoutTenant(async () => {
+      // Limpiar si existe
+      const existingOrg = await Organization.findOne({ slug: SLUG });
+      if (existingOrg) {
+        await Membership.deleteMany({ organization: existingOrg._id });
+        await Organization.deleteOne({ _id: existingOrg._id });
+      }
+      const existingUser = await User.findOne({ email: EMAIL });
+      if (existingUser) await User.deleteOne({ _id: existingUser._id });
+
+      // Crear org con trial vencido hace 5 días
+      const org = await Organization.create({
+        name: 'Agencia Demo Vencida',
+        slug: SLUG,
+        plan: 'free_trial',
+        trialExpiresAt: new Date(Date.now() - 5 * 86400000),
+        status: 'active',
+        branding: { displayName: 'Agencia Demo Vencida', primaryColor: '#6366f1' }
+      });
+
+      // Crear usuario verificado
+      const hash = await bcrypt.hash(PASSWORD, 10);
+      const user = await User.create({
+        name: 'Admin Demo',
+        email: EMAIL,
+        password: hash,
+        role: 'admin',
+        isActive: true,
+        isVerified: true
+      });
+
+      // Membership owner
+      await Membership.create({
+        user: user._id,
+        organization: org._id,
+        role: 'admin',
+        isOwner: true,
+        status: 'active',
+        acceptedAt: new Date()
+      });
+
+      res.json({ ok: true, email: EMAIL, password: PASSWORD, orgId: org._id });
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ───── Wall: todas las demás rutas /api/* requieren autenticación + org activa ─────
 // Rutas públicas explícitas que se saltan este wall: las definidas ANTES de esta línea
 // (ej. /api/auth, /api/health). Rutas tipo /api/tickets/public deben usar un sub-router.
