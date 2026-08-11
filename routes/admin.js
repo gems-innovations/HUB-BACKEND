@@ -15,6 +15,13 @@ const { runWithoutTenant } = require('../services/tenantContext');
 const { ensureDefaultRolesForOrg } = require('../services/initService');
 const SuperAdminAudit = require('../models/SuperAdminAudit');
 
+// Escapa caracteres especiales de regex — usado en la búsqueda de /organizations.
+// (bug encontrado: se llamaba más abajo sin estar definida, rompía con 500 cualquier
+// búsqueda con texto).
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Helper de auditoría — fire-and-forget, no rompe la request si falla.
 function audit(req, action, opts = {}) {
   SuperAdminAudit.create({
@@ -187,21 +194,75 @@ router.delete('/organizations/:id', async (req, res) => {
   }
 });
 
-// GET /api/admin/organizations/:id/stats  → métricas básicas
+// GET /api/admin/organizations/:id/stats  → métricas para el panel de control.
+// El frontend no llamaba esto todavía (endpoint "huérfano") — se amplía aquí y se
+// conecta en OrganizationsAdmin.vue con un modal de detalle por organización.
 router.get('/organizations/:id/stats', async (req, res) => {
   try {
     const orgId = req.params.id;
-    const models = ['Client', 'Activity', 'Case', 'Ticket', 'Task', 'Wiki', 'ProspectConversation'];
-    const counts = {};
-    await runWithoutTenant(async () => {
-      for (const m of models) {
-        const Model = require('../models/' + m);
-        counts[m.toLowerCase()] = await Model.countDocuments({ organizationId: orgId });
-      }
-      counts.members = await Membership.countDocuments({ organization: orgId, status: 'active' });
+    const org = await runWithoutTenant(() => Organization.findById(orgId).lean());
+    if (!org) return res.status(404).json({ success: false, message: 'Organización no encontrada' });
+
+    const Client = require('../models/Client');
+    const Activity = require('../models/Activity');
+    const Case = require('../models/Case');
+    const Ticket = require('../models/Ticket');
+    const Task = require('../models/Task');
+    const Wiki = require('../models/Wiki');
+    const ProspectConversation = require('../models/ProspectConversation');
+
+    const counts = await runWithoutTenant(async () => {
+      const [client, activity, caseCount, ticket, task, wiki, prospectconversation, roleAgg, ticketsOpen] = await Promise.all([
+        Client.countDocuments({ organizationId: orgId }),
+        Activity.countDocuments({ organizationId: orgId }),
+        Case.countDocuments({ organizationId: orgId }),
+        Ticket.countDocuments({ organizationId: orgId }),
+        Task.countDocuments({ organizationId: orgId }),
+        Wiki.countDocuments({ organizationId: orgId }),
+        ProspectConversation.countDocuments({ organizationId: orgId }),
+        Membership.aggregate([
+          { $match: { organization: org._id, status: 'active' } },
+          { $group: { _id: '$role', count: { $sum: 1 } } }
+        ]),
+        Ticket.countDocuments({ organizationId: orgId, status: { $in: ['new', 'open', 'waiting'] } })
+      ]);
+      return {
+        client, activity, case: caseCount, ticket, task, wiki, prospectconversation,
+        members: roleAgg.reduce((s, r) => s + r.count, 0),
+        membersByRole: Object.fromEntries(roleAgg.map(r => [r._id || 'sin-rol', r.count])),
+        ticketsOpen
+      };
     });
-    res.json({ success: true, data: counts });
+
+    // Última actividad real de la organización — el más reciente entre estas 3
+    // colecciones (suficiente como pulso de "¿sigue usando esto de verdad?").
+    const [lastActivity, lastCase, lastTicket] = await runWithoutTenant(() => Promise.all([
+      Activity.findOne({ organizationId: orgId }).sort({ updatedAt: -1 }).select('updatedAt').lean(),
+      Case.findOne({ organizationId: orgId }).sort({ updatedAt: -1 }).select('updatedAt').lean(),
+      Ticket.findOne({ organizationId: orgId }).sort({ updatedAt: -1 }).select('updatedAt').lean()
+    ]));
+    const lastDates = [lastActivity, lastCase, lastTicket]
+      .map(d => d?.updatedAt).filter(Boolean).map(d => new Date(d).getTime());
+    const lastActivityAt = lastDates.length ? new Date(Math.max(...lastDates)) : null;
+
+    let trialDaysRemaining = null;
+    if (org.plan === 'free_trial' && org.trialExpiresAt) {
+      trialDaysRemaining = Math.ceil((new Date(org.trialExpiresAt).getTime() - Date.now()) / 86400000);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...counts,
+        plan: org.plan,
+        status: org.status,
+        createdAt: org.createdAt,
+        trialDaysRemaining,
+        lastActivityAt
+      }
+    });
   } catch (err) {
+    console.error('[admin] org stats error:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
