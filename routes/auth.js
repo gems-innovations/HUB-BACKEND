@@ -6,6 +6,7 @@ const User = require('../models/User');
 const Membership = require('../models/Membership');
 const Organization = require('../models/Organization');
 const RefreshToken = require('../models/RefreshToken');
+const TrustedDevice = require('../models/TrustedDevice');
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
 const jwt = require('jsonwebtoken');
@@ -14,6 +15,34 @@ const { generateToken, generateRefreshToken, authenticateToken, JWT_SECRET } = r
 const { sendVerificationEmail, notifyTrialContactRequest } = require('../services/emailService');
 
 const router = express.Router();
+
+// ───── Dispositivos de confianza (2FA) ─────
+const TRUSTED_DEVICE_DAYS = 30;
+
+function getRequestIp(req) {
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || '';
+}
+
+async function isDeviceTrusted(userId, deviceId) {
+  if (!deviceId) return false;
+  const device = await TrustedDevice.findOne({ deviceId, user: userId, expiresAt: { $gt: new Date() } });
+  if (!device) return false;
+  device.lastUsedAt = new Date();
+  await device.save();
+  return true;
+}
+
+async function trustDevice(userId, req) {
+  const deviceId = crypto.randomBytes(32).toString('hex');
+  await TrustedDevice.create({
+    deviceId,
+    user: userId,
+    deviceInfo: req.headers['user-agent'] || '',
+    ipAddress: getRequestIp(req),
+    expiresAt: new Date(Date.now() + TRUSTED_DEVICE_DAYS * 24 * 60 * 60 * 1000)
+  });
+  return deviceId;
+}
 
 // ───── Upload de fotos de perfil ─────
 const storage = multer.diskStorage({
@@ -284,7 +313,7 @@ router.post('/trial-contact', authenticateToken, async (req, res) => {
 // Si tiene varias → token pre-auth + lista de memberships para que el frontend muestre selector.
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, deviceId } = req.body;
 
     // Validación estricta de tipo — mongo-sanitize ya neutraliza operadores como $ne,
     // pero un atacante puede mandar email/password como objeto/array. Sin este check,
@@ -318,8 +347,9 @@ router.post('/login', async (req, res) => {
     ].slice(0, 10);
     await user.save();
 
-    // 2FA check
-    if (user.isTwoFactorEnabled) {
+    // 2FA check — se salta si el dispositivo ya fue marcado como de confianza
+    // en una verificación anterior (ver POST /verify-2fa).
+    if (user.isTwoFactorEnabled && !(await isDeviceTrusted(user._id, deviceId))) {
       const tempToken = jwt.sign({ userId: user._id, require2FA: true }, JWT_SECRET, { expiresIn: '5m' });
       return res.json({
         success: true,
@@ -668,7 +698,7 @@ router.post('/refresh', async (req, res) => {
 // POST /verify-2fa - Verificar código durante login
 router.post('/verify-2fa', async (req, res) => {
   try {
-    const { tempToken, code } = req.body;
+    const { tempToken, code, trustDevice: shouldTrust } = req.body;
     if (!tempToken || !code) return res.status(400).json({ success: false, message: 'Token temporal y código requeridos' });
 
     let decoded;
@@ -698,6 +728,10 @@ router.post('/verify-2fa', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Código incorrecto' });
     }
 
+    // Si el usuario pidió "confiar en este dispositivo", genera el deviceId
+    // que el frontend guardará y reenviará en logins futuros para saltarse 2FA.
+    const trustedDeviceId = shouldTrust ? await trustDevice(user._id, req) : undefined;
+
     // 2FA exitoso, continuar con el flujo normal de login
     const memberships = (await loadActiveMemberships(user._id, user)).filter(m => m.organization);
 
@@ -712,7 +746,7 @@ router.post('/verify-2fa', async (req, res) => {
       const m = memberships[0];
       const token = generateToken(user._id, m.organization._id);
       const refreshToken = await generateRefreshToken(user._id, m.organization._id, req);
-      
+
       m.lastActiveAt = new Date();
       await m.save();
       return res.json({
@@ -724,7 +758,8 @@ router.post('/verify-2fa', async (req, res) => {
           user: user.toJSON(),
           organization: m.organization,
           membership: { role: m.role, isOwner: m.isOwner, permissions: m.permissions },
-          requiresOrgSelection: false
+          requiresOrgSelection: false,
+          trustedDeviceId
         }
       });
     }
@@ -738,7 +773,8 @@ router.post('/verify-2fa', async (req, res) => {
         token: preAuthToken,
         user: user.toJSON(),
         memberships: memberships.map(membershipSummary),
-        requiresOrgSelection: true
+        requiresOrgSelection: true,
+        trustedDeviceId
       }
     });
 
@@ -826,10 +862,48 @@ router.post('/disable-2fa', authenticateToken, async (req, res) => {
     user.pendingTwoFactorSecret = null;
     await user.save();
 
+    // Al desactivar 2FA no tiene sentido dejar dispositivos "de confianza" vivos.
+    await TrustedDevice.deleteMany({ user: user._id });
+
     res.json({ success: true, message: '2FA deshabilitado' });
   } catch (error) {
     console.error('Disable 2FA error:', error);
     res.status(500).json({ success: false, message: 'Error deshabilitando 2FA' });
+  }
+});
+
+// GET /trusted-devices - Lista los dispositivos que se saltan el código 2FA.
+router.get('/trusted-devices', authenticateToken, async (req, res) => {
+  try {
+    const devices = await TrustedDevice.find({ user: req.user._id }).sort({ lastUsedAt: -1 });
+    res.json({
+      success: true,
+      data: devices.map(d => ({
+        _id: d._id,
+        deviceInfo: d.deviceInfo,
+        ipAddress: d.ipAddress,
+        lastUsedAt: d.lastUsedAt,
+        expiresAt: d.expiresAt,
+        createdAt: d.createdAt
+      }))
+    });
+  } catch (error) {
+    console.error('List trusted devices error:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo dispositivos de confianza' });
+  }
+});
+
+// DELETE /trusted-devices/:id - Revoca un dispositivo (vuelve a pedir 2FA ahí).
+router.delete('/trusted-devices/:id', authenticateToken, async (req, res) => {
+  try {
+    const result = await TrustedDevice.deleteOne({ _id: req.params.id, user: req.user._id });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Dispositivo no encontrado' });
+    }
+    res.json({ success: true, message: 'Dispositivo revocado' });
+  } catch (error) {
+    console.error('Revoke trusted device error:', error);
+    res.status(500).json({ success: false, message: 'Error revocando el dispositivo' });
   }
 });
 
