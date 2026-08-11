@@ -191,13 +191,13 @@ const refreshLimiter = rateLimit({
 
 // Self-service onboarding: estricto contra spam de organizaciones.
 const registerOrgLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,    // 1 hora
+  windowMs: 10 * 60 * 1000,    // 10 minutos
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
   passOnStoreError: true,
   store: makeStore('rl:regorgs:'),
-  message: { success: false, message: 'Demasiados intentos de registro. Intenta en 1 hora.' },
+  message: { success: false, message: 'Demasiados intentos de registro. Intenta en 10 minutos.' },
 });
 
 // Primero verificamos bans, luego aplicamos el limiter por ventana.
