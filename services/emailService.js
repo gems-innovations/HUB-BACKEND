@@ -793,14 +793,17 @@ function ticketCommentHtml({ ticket, commentText, authorName, isAgentReply }) {
 }
 
 // ─── SLA Alert ────────────────────────────────────────────────────────────────
-function slAlertHtml(ticket) {
+function slAlertHtml(ticket, thresholdMinutes) {
   const ticketId = esc(String(ticket.ticketNumber));
+  const thresholdText = thresholdMinutes
+    ? (thresholdMinutes < 60 ? `${thresholdMinutes} minutos` : `${Math.round(thresholdMinutes / 60)} hora(s)`)
+    : '2 horas';
 
   const bodyRows = `
     <tr>
       <td class="pad" style="padding:28px 28px 20px;">
         <h1 style="margin:0 0 6px;font-size:20px;font-weight:800;color:${D.t0};">⚠️ Alerta de SLA</h1>
-        <p style="margin:0;font-size:14px;color:${D.t1};">El ticket <strong style="color:#dc2626;">#${ticketId}</strong> lleva más de 2 horas sin ser atendido.</p>
+        <p style="margin:0;font-size:14px;color:${D.t1};">El ticket <strong style="color:#dc2626;">#${ticketId}</strong> (prioridad ${esc(ticket.priority || 'media')}) lleva más de ${thresholdText} sin una primera respuesta.</p>
       </td>
     </tr>
 
@@ -831,7 +834,7 @@ function slAlertHtml(ticket) {
   `;
 
   return emailBase({
-    preheader: `⚠️ ALERTA SLA: Ticket #${ticketId} sin atender por 2+ horas`,
+    preheader: `⚠️ ALERTA SLA: Ticket #${ticketId} sin primera respuesta (${thresholdText}+)`,
     headerRow: `<span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;">🚨 SLA</span>`,
     bodyRows,
   });
@@ -885,13 +888,13 @@ async function notifyNewComment(ticket, comment, author) {
   }
 }
 
-async function notifySLAAlert(ticket) {
+async function notifySLAAlert(ticket, thresholdMinutes) {
   const supportEmail = process.env.SUPPORT_EMAIL || process.env.SMTP_USER;
   if (!supportEmail) return;
   await sendMail({
     to: supportEmail,
     subject: `⚠️ ALERTA SLA: Ticket #${ticket.ticketNumber} sin atender`,
-    html: slAlertHtml(ticket),
+    html: slAlertHtml(ticket, thresholdMinutes),
   });
 }
 

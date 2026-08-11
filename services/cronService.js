@@ -83,6 +83,22 @@ function initTeamReportsCron(app) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SLA Alert System Cron
 // ═══════════════════════════════════════════════════════════════════════════
+// Umbrales de "primera respuesta" por prioridad — deben coincidir con lo que
+// el frontend le promete al agente en InternalTickets.vue (PRIORITY_META.sla):
+// P1 urgent < 15min, P2 high < 1h, P3 medium < 4h, P4 low < 24h.
+// Antes esto era un plazo fijo de 2h para TODAS las prioridades, y sólo
+// aplicaba a tickets sin asignar (status:'new') — un P1 ya asignado a un
+// agente podía llevar horas sin que nadie respondiera y jamás disparaba
+// alerta alguna. Ahora se revisa cualquier ticket activo (new u open) que
+// todavía no tiene ni un solo comentario (sin primera respuesta real),
+// usando el umbral de SU propia prioridad.
+const SLA_MINUTES = {
+  urgent: 15,
+  high: 60,
+  medium: 240,
+  low: 1440,
+};
+
 function initSlaCron() {
   console.log('🔄 Inicializando cron para SLA Alerts...');
 
@@ -91,17 +107,23 @@ function initSlaCron() {
       const { notifySLAAlert } = require('../services/emailService');
       const Ticket = require('../models/Ticket');
 
-      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const now = Date.now();
 
-      const overdueTickets = await Ticket.find({
-        status: 'new',
+      const candidates = await Ticket.find({
+        status: { $in: ['new', 'open'] },
         slaNotified: { $ne: true },
-        createdAt: { $lt: twoHoursAgo }
+        $or: [{ comments: { $size: 0 } }, { comments: { $exists: false } }]
+      });
+
+      const overdueTickets = candidates.filter(t => {
+        const thresholdMin = SLA_MINUTES[t.priority] ?? SLA_MINUTES.medium;
+        const ageMin = (now - new Date(t.createdAt).getTime()) / 60000;
+        return ageMin > thresholdMin;
       });
 
       for (const ticket of overdueTickets) {
-        console.log(`[SLA] Ticket #${ticket.ticketNumber} is overdue! Sending alert.`);
-        await notifySLAAlert(ticket);
+        console.log(`[SLA] Ticket #${ticket.ticketNumber} (${ticket.priority}) sin primera respuesta y vencido. Alertando.`);
+        await notifySLAAlert(ticket, SLA_MINUTES[ticket.priority] ?? SLA_MINUTES.medium);
         ticket.slaNotified = true;
         await ticket.save();
       }
@@ -110,7 +132,7 @@ function initSlaCron() {
     }
   });
 
-  console.log('✅ Cron para SLA Alerts inicializado');
+  console.log('✅ Cron para SLA Alerts inicializado (umbrales por prioridad)');
 }
 
 module.exports = { initTaskReportsCron, initTeamReportsCron, initSlaCron };
