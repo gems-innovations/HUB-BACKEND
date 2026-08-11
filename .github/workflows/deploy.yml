@@ -97,6 +97,7 @@ jobs:
           APP_URL=${{ secrets.APP_URL }}
           CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
           RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
           EMAIL_FROM=${{ secrets.EMAIL_FROM }}
           SUPPORT_EMAIL=${{ secrets.SUPPORT_EMAIL }}
