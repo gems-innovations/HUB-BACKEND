@@ -53,6 +53,13 @@ const organizationSchema = new mongoose.Schema({
     maxTasks:     { type: Number, default: 0 }, // 0 = ilimitado
     maxStorageMb: { type: Number, default: 0 }
   },
+  // Excepciones puntuales al interruptor global de módulos (services/moduleAccess.js).
+  // Ausente/undefined en una clave = hereda el valor global; true/false = fuerza
+  // esa organización a mostrar/ocultar el módulo sin importar el global.
+  moduleOverrides: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

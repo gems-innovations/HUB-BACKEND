@@ -31,6 +31,7 @@ const superAdminAuditSchema = new mongoose.Schema({
       'org_archive',
       'superadmin_grant',
       'superadmin_revoke',
+      'modules_update',
       'other_action'
     ],
     default: 'login_as_superadmin'

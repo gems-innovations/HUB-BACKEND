@@ -266,6 +266,7 @@ const docsRoutes = require('./routes/docs');
 
 const minutesRoutes = require('./routes/minutes');
 const settingsRoutes = require('./routes/settings');
+const modulesRoutes = require('./routes/modules');
 const teamRoutes = require('./routes/team');
 const reportsRoutes = require('./routes/reports');
 
@@ -378,6 +379,7 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/docs', docsRoutes);
 app.use('/api/minutes', minutesRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/modules', modulesRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/chat', chatRoutes);

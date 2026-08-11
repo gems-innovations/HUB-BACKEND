@@ -14,6 +14,8 @@ const { requireSuperAdmin } = require('../middleware/auth');
 const { runWithoutTenant } = require('../services/tenantContext');
 const { ensureDefaultRolesForOrg } = require('../services/initService');
 const SuperAdminAudit = require('../models/SuperAdminAudit');
+const PlatformSetting = require('../models/PlatformSetting');
+const { TOGGLEABLE_MODULES, getGlobalModuleToggles } = require('../services/moduleAccess');
 
 // Escapa caracteres especiales de regex — usado en la búsqueda de /organizations.
 // (bug encontrado: se llamaba más abajo sin estar definida, rompía con 500 cualquier
@@ -162,7 +164,7 @@ router.post('/organizations', async (req, res) => {
 router.patch('/organizations/:id', async (req, res) => {
   try {
     const updates = {};
-    const allowed = ['name', 'plan', 'status', 'contact', 'branding', 'limits', 'trialExpiresAt'];
+    const allowed = ['name', 'plan', 'status', 'contact', 'branding', 'limits', 'trialExpiresAt', 'moduleOverrides'];
     for (const key of allowed) {
       if (req.body[key] !== undefined) updates[key] = req.body[key];
     }
@@ -264,6 +266,48 @@ router.get('/organizations/:id/stats', async (req, res) => {
   } catch (err) {
     console.error('[admin] org stats error:', err);
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ───── Módulos (apagador global) ─────
+// El interruptor por organización va vía PATCH /organizations/:id { moduleOverrides }
+// (arriba) — esto es solo el maestro de plataforma, aplica a orgs sin excepción propia.
+
+// GET /api/admin/module-toggles  → mapa global { modulo: boolean }
+router.get('/module-toggles', async (req, res) => {
+  try {
+    const modules = await getGlobalModuleToggles();
+    res.json({ success: true, data: modules });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PATCH /api/admin/module-toggles  → body: { modules: { cases: false, ... } }
+router.patch('/module-toggles', async (req, res) => {
+  try {
+    const { modules } = req.body;
+    if (!modules || typeof modules !== 'object') {
+      return res.status(400).json({ success: false, message: 'Falta el objeto "modules"' });
+    }
+    const clean = {};
+    for (const key of TOGGLEABLE_MODULES) {
+      if (modules[key] !== undefined) clean[key] = !!modules[key];
+    }
+
+    const current = await getGlobalModuleToggles();
+    const updated = { ...current, ...clean };
+
+    await PlatformSetting.findOneAndUpdate(
+      { key: 'moduleToggles' },
+      { value: updated },
+      { upsert: true, new: true }
+    );
+
+    audit(req, 'modules_update', { metadata: { scope: 'global', changes: clean } });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
   }
 });
 
