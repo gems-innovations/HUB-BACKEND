@@ -200,6 +200,19 @@ const registerOrgLimiter = rateLimit({
   message: { success: false, message: 'Demasiados intentos de registro. Intenta en 10 minutos.' },
 });
 
+// Proxy de IA: cada llamada cuesta dinero real (tokens de OpenAI). Protege
+// contra un loop de frontend con bug o abuso — 30 llamadas/10min por IP,
+// generoso para uso normal pero corta un runaway antes de que salga caro.
+const aiLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  passOnStoreError: true,
+  store: makeStore('rl:ai:'),
+  message: { success: false, message: 'Demasiadas solicitudes de IA. Intenta en unos minutos.' },
+});
+
 // Formulario público de soporte: sin esto, cualquiera puede spamear tickets
 // con hasta 5 adjuntos de 10MB cada uno, sin límite.
 const publicTicketLimiter = rateLimit({
@@ -394,7 +407,7 @@ app.use('/api/tickets/public', publicTicketLimiter);
 app.use('/api/tickets', ticketsRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/wiki', wikiRoutes);
-app.use('/api/ai', aiRoutes);
+app.use('/api/ai', aiLimiter, aiRoutes);
 app.use('/api/admin', adminRoutes);
 
 
