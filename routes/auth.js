@@ -11,7 +11,7 @@ const qrcode = require('qrcode');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { generateToken, generateRefreshToken, authenticateToken, JWT_SECRET } = require('../middleware/auth');
-const { sendVerificationEmail } = require('../services/emailService');
+const { sendVerificationEmail, notifyTrialContactRequest } = require('../services/emailService');
 
 const router = express.Router();
 
@@ -151,15 +151,21 @@ router.post('/register', async (req, res) => {
 // ───── POST /register-org (Self-Service Onboarding) ─────
 router.post('/register-org', async (req, res) => {
   try {
-    const { orgName, userName, email, password } = req.body;
+    const { orgName, userName, email, password, phone } = req.body;
 
     if (typeof orgName !== 'string' || typeof userName !== 'string'
         || typeof email !== 'string' || typeof password !== 'string'
-        || !orgName.trim() || !userName.trim() || !email.trim() || !password) {
+        || typeof phone !== 'string'
+        || !orgName.trim() || !userName.trim() || !email.trim() || !password || !phone.trim()) {
       return res.status(400).json({ success: false, message: 'Todos los campos son requeridos' });
     }
     if (password.length < 8) {
       return res.status(400).json({ success: false, message: 'La contraseña debe tener al menos 8 caracteres' });
+    }
+    // Validación laxa: prefijo internacional (+xxx) + al menos 6 dígitos de número.
+    const phoneTrimmed = phone.trim();
+    if (!/^\+\d{1,4}[\s-]?\d{6,14}$/.test(phoneTrimmed)) {
+      return res.status(400).json({ success: false, message: 'Ingresa un teléfono válido con el prefijo del país (ej. +506 8888-8888)' });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -185,6 +191,7 @@ router.post('/register-org', async (req, res) => {
       name: userName.trim(),
       email: normalizedEmail,
       password,
+      phone: phoneTrimmed,
       role: 'admin',
       isVerified: false,
       verificationToken
@@ -201,6 +208,7 @@ router.post('/register-org', async (req, res) => {
       plan: 'free_trial',
       trialExpiresAt,
       createdBy: user._id,
+      contact: { email: normalizedEmail, phone: phoneTrimmed }, // para cross-selling
       limits: { maxUsers: 5, maxTasks: 50 }   // plan gratuito
     });
 
@@ -245,6 +253,29 @@ router.get('/verify-email/:token', async (req, res) => {
   } catch (error) {
     console.error('Verify email error:', error);
     res.status(500).json({ success: false, message: 'Error interno del servidor' });
+  }
+});
+
+// ───── POST /trial-contact (lead cuando venció el trial) ─────
+// El usuario sigue autenticado aunque su trial venció (el guard solo lo redirige
+// en el frontend), así que reusamos authenticateToken para no perder el lead:
+// no requerimos organización activa/no-expirada, solo un token válido.
+router.post('/trial-contact', authenticateToken, async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    if (phone !== undefined && typeof phone !== 'string') {
+      return res.status(400).json({ success: false, message: 'Teléfono inválido' });
+    }
+    if (message !== undefined && typeof message !== 'string') {
+      return res.status(400).json({ success: false, message: 'Mensaje inválido' });
+    }
+
+    await notifyTrialContactRequest(req.user, req.organization, (phone || '').trim(), (message || '').trim());
+
+    res.json({ success: true, message: 'Recibimos tu solicitud, te contactaremos pronto.' });
+  } catch (error) {
+    console.error('Trial-contact error:', error);
+    res.status(500).json({ success: false, message: 'Error al enviar tu solicitud' });
   }
 });
 

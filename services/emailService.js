@@ -895,6 +895,74 @@ async function notifySLAAlert(ticket) {
   });
 }
 
+// ─── Lead de trial vencido (contactar para activar plan) ─────────────────────
+function trialContactHtml(user, organization, phone, message) {
+  const bodyRows = `
+    <tr>
+      <td class="pad" style="padding:28px 28px 20px;">
+        <h1 style="margin:0 0 6px;font-size:20px;font-weight:800;color:${D.t0};">Lead: trial vencido quiere activar plan</h1>
+        <p style="margin:0;font-size:14px;color:${D.t1};">Contactar cuanto antes para no perder la venta.</p>
+      </td>
+    </tr>
+    <tr>
+      <td class="pad" style="padding:0 28px 20px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+          style="background:${D.el};border:1px solid ${D.border2};border-radius:10px;overflow:hidden;">
+          <tr>
+            <td style="padding:12px 16px;border-bottom:1px solid ${D.border};">
+              <p style="margin:0;font-size:11px;color:${D.t2};text-transform:uppercase;letter-spacing:.6px;font-weight:700;">Contacto</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:14px 16px;">
+              <table width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};width:36%;font-weight:600;padding-bottom:8px;">Organización</td>
+                  <td style="font-size:13px;color:${D.t0};font-weight:700;padding-bottom:8px;">${esc(organization?.name || '—')}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;padding-bottom:8px;">Nombre</td>
+                  <td style="font-size:13px;color:${D.t0};font-weight:600;padding-bottom:8px;">${esc(user?.name || '—')}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;padding-bottom:8px;">Email</td>
+                  <td style="font-size:13px;color:${D.t0};padding-bottom:8px;"><a href="mailto:${esc(user?.email)}" style="color:${D.accent};text-decoration:none;">${esc(user?.email || '—')}</a></td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;${message ? 'padding-bottom:8px;' : ''}">Teléfono</td>
+                  <td style="font-size:13px;color:${D.t0};font-weight:700;${message ? 'padding-bottom:8px;' : ''}">${phone ? `<a href="tel:${esc(phone.replace(/[^\d+]/g,''))}" style="color:${D.t0};text-decoration:none;">${esc(phone)}</a>` : '—'}</td>
+                </tr>
+                ${message ? `<tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;vertical-align:top;">Mensaje</td>
+                  <td style="font-size:13px;color:${D.t1};line-height:1.5;">${esc(message)}</td>
+                </tr>` : ''}
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    ${divRow()}
+    ${ctaRow(`mailto:${esc(user?.email)}`, 'Responder por correo &nbsp;→', D.accent)}
+  `;
+
+  return emailBase({
+    preheader: `${organization?.name || 'Un cliente'} quiere activar su plan tras vencer el trial`,
+    headerRow: `<span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;">Lead</span>`,
+    bodyRows,
+  });
+}
+
+async function notifyTrialContactRequest(user, organization, phone, message) {
+  const supportEmail = process.env.SUPPORT_EMAIL || process.env.SMTP_USER;
+  if (!supportEmail) return;
+  await sendMail({
+    to: supportEmail,
+    subject: `💰 Lead trial vencido: ${organization?.name || user?.name || 'Organización'} quiere activar plan`,
+    html: trialContactHtml(user, organization, phone, message),
+  });
+}
+
 module.exports = {
   sendMail,
   notifyTicketCreated,
@@ -904,5 +972,6 @@ module.exports = {
   sendVerificationEmail,
   notifyTaskAssigned,
   notifyMentionEmail,
+  notifyTrialContactRequest,
 };
 
