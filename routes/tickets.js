@@ -4,6 +4,8 @@ const Ticket = require('../models/Ticket');
 const User = require('../models/User');
 const Membership = require('../models/Membership');
 const Organization = require('../models/Organization');
+const Case = require('../models/Case');
+const Wiki = require('../models/Wiki');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 const { runWithTenant } = require('../services/tenantContext');
 const multer = require('multer');
@@ -47,6 +49,22 @@ const upload = multer({
 const getPriorityText = (priority) => ({
   low: '🟢 Baja', medium: '🟡 Media', high: '🟠 Alta', urgent: '🔴 Urgente'
 })[priority] || '🟡 Media';
+
+// Sólo agentes/dueños pueden ver todos los tickets de la org, reasignar o cambiar estado.
+const requireAgent = requireRole('admin', 'supervisor', 'support');
+
+// Un ticket "es del cliente" si el userId coincide o, si no hay cuenta, por email
+// (formulario público no siempre trae userId). Se usa para que un cliente sólo
+// pueda ver/comentar SU PROPIO ticket, nunca el de otro cliente de la misma org.
+function ownsTicket(ticket, user) {
+  if (ticket.submittedBy?.userId && String(ticket.submittedBy.userId) === String(user._id)) return true;
+  if (ticket.submittedBy?.email && user.email && ticket.submittedBy.email.toLowerCase() === user.email.toLowerCase()) return true;
+  return false;
+}
+function isAgent(req) {
+  const m = req.membership;
+  return !!m && (m.isOwner || m.isSuperAdminSession || ['admin', 'supervisor', 'support'].includes(m.role));
+}
 
 // ───── PÚBLICAS ─────
 // POST /api/tickets/public/:orgSlug  — formulario externo de soporte
@@ -116,7 +134,46 @@ router.post('/public/:orgSlug', upload.array('files', 5), async (req, res) => {
 // (authenticateToken + requireOrganization ya viene del wall global en index.js,
 //  los mantengo explícitos aquí también como defensa adicional)
 
-router.get('/', authenticateToken, async (req, res) => {
+// POST /api/tickets  — creación manual por un agente logueado.
+// A diferencia de /public/:orgSlug (que resuelve la org por slug de la URL, pensado
+// para el formulario externo sin sesión), esta ruta usa req.organizationId del
+// propio token — así el ticket SIEMPRE queda en la organización real del agente,
+// sin depender de adivinar/asumir un slug por defecto.
+router.post('/', authenticateToken, requireAgent, upload.array('files', 5), async (req, res) => {
+  try {
+    const { subject, description, category, priority, name, email, clientId, assignedTo } = req.body;
+    if (!subject || !description) {
+      return res.status(400).json({ success: false, error: 'Asunto y descripción son requeridos' });
+    }
+    const attachments = (req.files || []).map(f => `/uploads/tickets/${f.filename}`);
+
+    const ticket = new Ticket({
+      organizationId: req.organizationId,
+      subject, description, category, priority, attachments,
+      submittedBy: { name: name || req.user.name, email: email || req.user.email, clientId, userId: req.user._id },
+      status: 'open'
+    });
+
+    if (assignedTo) {
+      const member = await Membership.findOne({ user: assignedTo, organization: req.organizationId, status: 'active' });
+      if (member) ticket.assignedTo = assignedTo;
+    }
+
+    await ticket.save();
+    const populated = await Ticket.findOne({ _id: ticket._id, organizationId: req.organizationId })
+      .populate('assignedTo', 'name email avatar');
+
+    notifyTicketCreated(populated || ticket, populated?.assignedTo || null)
+      .catch(e => console.error('[Email] notifyTicketCreated:', e.message));
+
+    res.status(201).json({ success: true, data: populated || ticket, message: 'Ticket creado exitosamente' });
+  } catch (error) {
+    console.error('Error creating internal ticket:', error);
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/', authenticateToken, requireAgent, async (req, res) => {
   try {
     const { status, priority, category, assignedTo } = req.query;
     const page = parseInt(req.query.page) || 1;
@@ -143,7 +200,7 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-router.get('/my', authenticateToken, async (req, res) => {
+router.get('/my', authenticateToken, requireAgent, async (req, res) => {
   try {
     const tickets = await Ticket.find({ organizationId: req.organizationId, assignedTo: req.user._id })
       .populate('submittedBy.userId', 'name email avatar')
@@ -185,24 +242,54 @@ router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const ticket = await Ticket.findOne({ _id: req.params.id, organizationId: req.organizationId })
       .populate('assignedTo', 'name email avatar')
-      .populate('comments.author', 'name email avatar role');
+      .populate('comments.author', 'name email avatar role')
+      .populate('linkedCases', 'titulo')
+      .populate('linkedWikiArticles', 'titulo');
 
     if (!ticket) return res.status(404).json({ success: false, message: 'Ticket no encontrado' });
-    res.json({ success: true, data: ticket });
+
+    // Un cliente/no-agente sólo puede ver su propio ticket, aunque conozca el _id
+    // de otro dentro de la misma organización.
+    if (!isAgent(req) && !ownsTicket(ticket, req.user)) {
+      return res.status(404).json({ success: false, message: 'Ticket no encontrado' });
+    }
+
+    // Los comentarios internos nunca deben llegar a un cliente, sin importar el rol
+    // exacto — si no es agente, se filtran antes de responder (defensa en profundidad,
+    // el frontend ya los oculta pero no hay que confiar sólo en eso).
+    const data = ticket.toObject();
+    if (!isAgent(req)) {
+      data.comments = data.comments.filter(c => !c.isInternal);
+    }
+
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-router.patch('/:id/status', authenticateToken, async (req, res) => {
+router.patch('/:id/status', authenticateToken, requireAgent, async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, assignedTo } = req.body;
     const ticket = await Ticket.findOne({ _id: req.params.id, organizationId: req.organizationId });
     if (!ticket) return res.status(404).json({ success: false, message: 'Ticket no encontrado' });
 
     const oldStatus = ticket.status;
-    const updateData = { status, updatedAt: new Date() };
+    const updateData = { updatedAt: new Date() };
+    if (status) updateData.status = status;
     if (status === 'resolved') updateData.resolvedAt = new Date();
+
+    // Reasignar a otro agente — valida que sea un miembro activo de esta org
+    // antes de aceptarlo (evita asignar a un userId ajeno a la organización).
+    if (assignedTo !== undefined) {
+      if (assignedTo === null || assignedTo === '') {
+        updateData.assignedTo = null;
+      } else {
+        const member = await Membership.findOne({ user: assignedTo, organization: req.organizationId, status: 'active' });
+        if (!member) return res.status(400).json({ success: false, message: 'El agente no pertenece a esta organización' });
+        updateData.assignedTo = assignedTo;
+      }
+    }
 
     const updated = await Ticket.findOneAndUpdate(
       { _id: req.params.id, organizationId: req.organizationId },
@@ -210,10 +297,62 @@ router.patch('/:id/status', authenticateToken, async (req, res) => {
       { new: true }
     ).populate('assignedTo', 'name email avatar');
 
-    if (status !== oldStatus) {
+    if (status && status !== oldStatus) {
       notifyStatusChanged(updated, oldStatus, status).catch(e => console.error('[Email] notifyStatusChanged:', e.message));
     }
     res.json({ success: true, data: updated });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// PATCH /api/tickets/:id  — edición de "Recursos Vinculados" (casos/wiki) del panel
+// de detalle. Sólo agentes; se valida que cada recurso pertenezca a ESTA organización
+// antes de guardarlo, para no poder vincular (y así filtrar la existencia de) un
+// Case/Wiki de otra organización sólo por adivinar su _id.
+router.patch('/:id', authenticateToken, requireAgent, async (req, res) => {
+  try {
+    const { linkedCases, linkedWikiArticles, tags } = req.body;
+    const update = {};
+
+    if (linkedCases !== undefined) {
+      const ids = Array.isArray(linkedCases) ? linkedCases : [];
+      if (ids.length) {
+        const count = await Case.countDocuments({ _id: { $in: ids }, organizationId: req.organizationId });
+        if (count !== ids.length) {
+          return res.status(400).json({ success: false, message: 'Uno o más casos no pertenecen a esta organización' });
+        }
+      }
+      update.linkedCases = ids;
+    }
+    if (linkedWikiArticles !== undefined) {
+      const ids = Array.isArray(linkedWikiArticles) ? linkedWikiArticles : [];
+      if (ids.length) {
+        const count = await Wiki.countDocuments({ _id: { $in: ids }, organizationId: req.organizationId });
+        if (count !== ids.length) {
+          return res.status(400).json({ success: false, message: 'Uno o más artículos de wiki no pertenecen a esta organización' });
+        }
+      }
+      update.linkedWikiArticles = ids;
+    }
+    if (Array.isArray(tags)) update.tags = tags;
+
+    if (!Object.keys(update).length) {
+      return res.status(400).json({ success: false, message: 'Nada que actualizar' });
+    }
+    update.updatedAt = new Date();
+
+    const ticket = await Ticket.findOneAndUpdate(
+      { _id: req.params.id, organizationId: req.organizationId },
+      update,
+      { new: true }
+    )
+      .populate('assignedTo', 'name email avatar')
+      .populate('linkedCases', 'titulo')
+      .populate('linkedWikiArticles', 'titulo');
+
+    if (!ticket) return res.status(404).json({ success: false, message: 'Ticket no encontrado' });
+    res.json({ success: true, data: ticket });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
@@ -227,10 +366,20 @@ router.post('/:id/comments', authenticateToken, upload.array('files', 5), async 
     const ticket = await Ticket.findOne({ _id: req.params.id, organizationId: req.organizationId });
     if (!ticket) return res.status(404).json({ success: false, message: 'Ticket no encontrado' });
 
+    const agent = isAgent(req);
+    // Un cliente sólo puede comentar en SU propio ticket, y nunca puede marcar
+    // una nota como interna (aunque el frontend no debería mandarlo, no confiamos
+    // en eso — se fuerza aquí sin importar lo que llegue en el body).
+    if (!agent) {
+      if (!ownsTicket(ticket, req.user)) {
+        return res.status(404).json({ success: false, message: 'Ticket no encontrado' });
+      }
+    }
+
     ticket.comments.push({
       text,
       author: req.user._id,
-      isInternal: isInternal === 'true' || isInternal === true,
+      isInternal: agent && (isInternal === 'true' || isInternal === true),
       attachments
     });
     await ticket.save();

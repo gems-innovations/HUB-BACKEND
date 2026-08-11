@@ -200,6 +200,18 @@ const registerOrgLimiter = rateLimit({
   message: { success: false, message: 'Demasiados intentos de registro. Intenta en 10 minutos.' },
 });
 
+// Formulario público de soporte: sin esto, cualquiera puede spamear tickets
+// con hasta 5 adjuntos de 10MB cada uno, sin límite.
+const publicTicketLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,    // 10 minutos
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  passOnStoreError: true,
+  store: makeStore('rl:ticketpub:'),
+  message: { success: false, message: 'Demasiados tickets creados. Intenta en unos minutos.' },
+});
+
 // Primero verificamos bans, luego aplicamos el limiter por ventana.
 app.use('/api/', banCheckMiddleware);
 app.use('/api/', generalLimiter);
@@ -376,6 +388,7 @@ app.use('/api/taskReports', taskReportsRoutes); // Alias para compatibilidad
 app.use('/api/tasks', tasksRoutes);
 app.use('/api/boards', boardsRoutes);
 app.use('/api/github', githubRoutes);
+app.use('/api/tickets/public', publicTicketLimiter);
 app.use('/api/tickets', ticketsRoutes);
 app.use('/api/roles', rolesRoutes);
 app.use('/api/wiki', wikiRoutes);

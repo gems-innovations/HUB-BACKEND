@@ -67,6 +67,10 @@ const ticketSchema = new mongoose.Schema({
   tags: [String],
   attachments: [String],
   comments: [ticketCommentSchema],
+  // Recursos vinculados desde el panel de detalle (agentes) — casos y artículos
+  // de wiki relacionados al problema reportado.
+  linkedCases: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Case' }],
+  linkedWikiArticles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Wiki' }],
   resolvedAt: {
     type: Date
   },
