@@ -46,6 +46,26 @@ const upload = multer({
   }
 });
 
+// El frontend ya valida tipo/tamaño/cantidad antes de enviar, pero si alguien
+// llega directo a la API (u otro cliente futuro) sin pasar por esa validación,
+// esto evita que un error crudo de Multer (en inglés, tipo "File too large")
+// llegue tal cual al usuario final.
+function handleUpload(multerMiddleware) {
+  return (req, res, next) => {
+    multerMiddleware(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ success: false, error: 'Cada archivo debe pesar máximo 10MB' });
+      }
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({ success: false, error: 'Máximo 5 archivos por envío' });
+      }
+      return res.status(400).json({ success: false, error: err.message || 'No se pudo procesar el archivo adjunto' });
+    });
+  };
+}
+const uploadTicketFiles = handleUpload(upload.array('files', 5));
+
 const getPriorityText = (priority) => ({
   low: '🟢 Baja', medium: '🟡 Media', high: '🟠 Alta', urgent: '🔴 Urgente'
 })[priority] || '🟡 Media';
@@ -69,7 +89,7 @@ function isAgent(req) {
 // ───── PÚBLICAS ─────
 // POST /api/tickets/public/:orgSlug  — formulario externo de soporte
 // Resuelve la org por slug y crea el ticket dentro de su contexto.
-router.post('/public/:orgSlug', upload.array('files', 5), async (req, res) => {
+router.post('/public/:orgSlug', uploadTicketFiles, async (req, res) => {
   try {
     const org = await Organization.findOne({ slug: req.params.orgSlug, status: 'active' });
     if (!org) {
@@ -139,7 +159,7 @@ router.post('/public/:orgSlug', upload.array('files', 5), async (req, res) => {
 // para el formulario externo sin sesión), esta ruta usa req.organizationId del
 // propio token — así el ticket SIEMPRE queda en la organización real del agente,
 // sin depender de adivinar/asumir un slug por defecto.
-router.post('/', authenticateToken, requireAgent, upload.array('files', 5), async (req, res) => {
+router.post('/', authenticateToken, requireAgent, uploadTicketFiles, async (req, res) => {
   try {
     const { subject, description, category, priority, name, email, clientId, assignedTo } = req.body;
     if (!subject || !description) {
@@ -358,7 +378,7 @@ router.patch('/:id', authenticateToken, requireAgent, async (req, res) => {
   }
 });
 
-router.post('/:id/comments', authenticateToken, upload.array('files', 5), async (req, res) => {
+router.post('/:id/comments', authenticateToken, uploadTicketFiles, async (req, res) => {
   try {
     const { text, isInternal } = req.body;
     const attachments = (req.files || []).map(f => `/uploads/tickets/${f.filename}`);
