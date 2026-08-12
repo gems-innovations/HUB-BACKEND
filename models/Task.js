@@ -310,22 +310,24 @@ TaskSchema.methods.logChange = function(field, oldValue, newValue, userId) {
 };
 
 // Métodos estáticos
-TaskSchema.statics.findByBoard = function(boardStatus) {
-  return this.find({ boardStatus })
+// organizationId es requerido en todos — sin él, cualquier organización vería
+// las tareas de las demás por board/sprint/rama de GitHub.
+TaskSchema.statics.findByBoard = function(boardStatus, organizationId) {
+  return this.find({ boardStatus, organizationId })
     .populate('assignedTo', 'name email photo')
     .populate('createdBy', 'name email')
     .sort({ priority: -1, updatedAt: -1 });
 };
 
-TaskSchema.statics.findBySprint = function(sprintId) {
-  return this.find({ 'sprint.id': sprintId })
+TaskSchema.statics.findBySprint = function(sprintId, organizationId) {
+  return this.find({ 'sprint.id': sprintId, organizationId })
     .populate('assignedTo', 'name email photo')
     .populate('createdBy', 'name email')
     .sort({ boardStatus: 1, priority: -1 });
 };
 
-TaskSchema.statics.findByGitHubBranch = function(branch) {
-  return this.findOne({ 'github.branch': branch })
+TaskSchema.statics.findByGitHubBranch = function(branch, organizationId) {
+  return this.findOne({ 'github.branch': branch, organizationId })
     .populate('assignedTo', 'name email photo')
     .populate('createdBy', 'name email');
 };

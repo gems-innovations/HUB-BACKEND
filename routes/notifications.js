@@ -174,9 +174,18 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // ── Crear notificación (uso interno y debug) ──────────────────────────────────
+// Nunca confiar en organizationId/userId del body: antes se guardaba tal cual,
+// así que cualquier usuario autenticado podía inyectar una notificación en el
+// feed de otra organización simplemente mandando otro userId/organizationId.
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const n = new Notification(req.body);
+    const userId = req.user?._id || req.user?.id;
+    const n = new Notification({
+      ...req.body,
+      userId,
+      organizationId: req.organizationId,
+      fromUserId: userId
+    });
     await n.save();
     res.json(n);
   } catch (error) {

@@ -257,7 +257,7 @@ router.get('/:id/sprints/active', async (req, res) => {
     }
     
     // Obtener tareas del sprint
-    const tasks = await Task.findBySprint(activeSprint.id);
+    const tasks = await Task.findBySprint(activeSprint.id, req.organizationId);
     
     res.json({
       sprint: activeSprint,

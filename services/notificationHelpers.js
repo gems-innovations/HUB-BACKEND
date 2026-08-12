@@ -3,6 +3,7 @@
 
 const Notification = require('../models/Notification');
 const User = require('../models/User');
+const Membership = require('../models/Membership');
 
 /**
  * Normaliza un nombre: quita tildes, espacios y baja a minúsculas.
@@ -19,7 +20,7 @@ function normalize(s) {
 /**
  * Detecta menciones @nombre en un texto y devuelve los _id de usuarios coincidentes.
  */
-async function resolveMentionedUserIds(text) {
+async function resolveMentionedUserIds(text, organizationId) {
   if (!text || typeof text !== 'string') return [];
   // Regex unicode-aware: acepta letras con tildes/ñ, números y _
   const matches = text.match(/@([\p{L}\p{N}_]+)/gu) || [];
@@ -27,7 +28,17 @@ async function resolveMentionedUserIds(text) {
 
   const handles = matches.map(m => normalize(m.slice(1)));
 
-  const users = await User.find({}).select('_id name').lean();
+  // Solo usuarios con membership activa en la MISMA organización de la
+  // actividad/tarea — antes buscaba en TODOS los usuarios de la base,
+  // pudiendo mencionar (y notificar) a alguien de otra organización si
+  // el nombre coincidía.
+  let userIds = null;
+  if (organizationId) {
+    const memberships = await Membership.find({ organization: organizationId, status: 'active' }).select('user').lean();
+    userIds = memberships.map(m => m.user);
+  }
+  const userQuery = userIds ? { _id: { $in: userIds } } : {};
+  const users = await User.find(userQuery).select('_id name').lean();
   const found = new Set();
   for (const u of users) {
     const handle = normalize(u.name);
@@ -45,7 +56,7 @@ async function resolveMentionedUserIds(text) {
  */
 async function notifyMentions({ text, entityType, entityId, entityTitle, fromUserId, organizationId }) {
   try {
-    const userIds = await resolveMentionedUserIds(text);
+    const userIds = await resolveMentionedUserIds(text, organizationId);
     if (userIds.length === 0) return;
 
     const ops = userIds.map(uid => ({

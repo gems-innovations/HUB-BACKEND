@@ -120,7 +120,7 @@ router.get('/mine', async (req, res) => {
     if (!userId) {
       return res.status(401).json({ error: 'No autenticado' });
     }
-    const activities = await Activity.find({ assignedTo: { $in: [userId] }, status: 'pending' })
+    const activities = await Activity.find({ assignedTo: { $in: [userId] }, status: 'pending', organizationId: req.organizationId })
       .populate('clientId', 'name email company')
       .populate('assignedTo', 'name email role photo avatar')
       .populate('createdBy', 'name email')
@@ -182,7 +182,7 @@ router.get('/:id', async (req, res) => {
 router.get('/assigned/:userId', async (req, res) => {
   try {
     console.log('[API] Buscando actividades para assignedTo:', req.params.userId);
-    const activities = await Activity.find({ assignedTo: { $in: [req.params.userId] } })
+    const activities = await Activity.find({ assignedTo: { $in: [req.params.userId] }, organizationId: req.organizationId })
       .populate('clientId', 'name email company')
       .populate('assignedTo', 'name email role photo avatar')
       .populate('createdBy', 'name email')
@@ -210,7 +210,12 @@ router.put('/:id', async (req, res) => {
 
     const userId = req.user?._id || req.user?.id;
     logFieldChanges(activity, req.body, HISTORY_TRACKED_FIELDS, userId);
-    Object.assign(activity, req.body);
+    // Solo se permite tocar los campos editables por este endpoint — nunca
+    // volcar el body entero con Object.assign, o el cliente podría pisar
+    // organizationId, history, comments, createdBy, etc.
+    HISTORY_TRACKED_FIELDS.forEach(field => {
+      if (field in req.body) activity[field] = req.body[field];
+    });
     await activity.save();
 
     const populated = await Activity.findById(activity._id)
@@ -272,6 +277,9 @@ router.patch('/:id/status', async (req, res) => {
 // Reasignar actividad
 router.patch('/:id/assign', authenticateToken, async (req, res) => {
   try {
+    if (!('assignedTo' in req.body)) {
+      return res.status(400).json({ error: 'assignedTo es requerido' });
+    }
     const { assignedTo } = req.body;
 
     // Verificar que el usuario existe
@@ -316,6 +324,9 @@ router.patch('/:id/assign', authenticateToken, async (req, res) => {
 // Actualizar progreso
 router.patch('/:id/progress', async (req, res) => {
   try {
+    if (!('completionPercentage' in req.body)) {
+      return res.status(400).json({ error: 'completionPercentage es requerido' });
+    }
     const { completionPercentage } = req.body;
     const activity = await Activity.findOne({ _id: req.params.id, organizationId: req.organizationId });
     if (!activity) return res.status(404).json({ error: 'Actividad no encontrada' });

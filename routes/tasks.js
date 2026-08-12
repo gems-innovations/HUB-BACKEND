@@ -53,8 +53,8 @@ router.get('/', async (req, res) => {
       department
     } = req.query;
     
-    let filter = {};
-    
+    let filter = { organizationId: req.organizationId };
+
     // Solo filtrar por board si se proporciona
     if (board) {
       filter.boardId = board;
@@ -105,7 +105,7 @@ router.get('/', async (req, res) => {
 // Obtener tareas por board status (para Kanban)
 router.get('/board/:boardStatus', async (req, res) => {
   try {
-    const tasks = await Task.findByBoard(req.params.boardStatus);
+    const tasks = await Task.findByBoard(req.params.boardStatus, req.organizationId);
     res.json(tasks);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -115,7 +115,7 @@ router.get('/board/:boardStatus', async (req, res) => {
 // Obtener tareas por sprint
 router.get('/sprint/:sprintId', async (req, res) => {
   try {
-    const tasks = await Task.findBySprint(req.params.sprintId);
+    const tasks = await Task.findBySprint(req.params.sprintId, req.organizationId);
     res.json(tasks);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -126,10 +126,11 @@ router.get('/sprint/:sprintId', async (req, res) => {
 router.get('/my-tasks', async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
-    
-    const tasks = await Task.find({ 
+
+    const tasks = await Task.find({
       assignedTo: userId,
-      boardStatus: { $ne: 'done' }
+      boardStatus: { $ne: 'done' },
+      organizationId: req.organizationId
     })
       .populate('assignedTo', 'name email photo')
       .populate('createdBy', 'name email')
@@ -168,7 +169,7 @@ router.get('/:id', async (req, res) => {
 // Buscar tarea por rama de GitHub
 router.get('/github/branch/:branch', async (req, res) => {
   try {
-    const task = await Task.findByGitHubBranch(req.params.branch);
+    const task = await Task.findByGitHubBranch(req.params.branch, req.organizationId);
     
     if (!task) {
       return res.status(404).json({ error: 'Tarea no encontrada para esta rama' });
@@ -231,16 +232,23 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Tarea no encontrada' });
     }
     
-    // Registrar cambios en el historial
-    const changedFields = Object.keys(req.body);
-    changedFields.forEach(field => {
+    // Solo se permite tocar campos editables — nunca volcar el body entero
+    // con Object.assign, o el cliente podría pisar organizationId, history,
+    // comments, createdBy, activeSessions, timeLogs, etc.
+    const TASK_EDITABLE_FIELDS = [
+      'title', 'description', 'type', 'status', 'boardStatus', 'priority',
+      'assignedTo', 'boardId', 'parentTask', 'epicId', 'featureId', 'userStoryId',
+      'blockedBy', 'relatedTasks', 'estimatedHours', 'actualHours', 'remainingHours',
+      'completionPercentage', 'startDate', 'dueDate', 'completedDate', 'tags',
+      'labels', 'sprint', 'github', 'clientId', 'acceptanceCriteria'
+    ];
+    TASK_EDITABLE_FIELDS.forEach(field => {
+      if (!(field in req.body)) return;
       if (task[field] !== req.body[field]) {
         task.logChange(field, task[field], req.body[field], userId);
       }
+      task[field] = req.body[field];
     });
-    
-    // Actualizar campos
-    Object.assign(task, req.body);
     await task.save();
     
     await task.populate('assignedTo', 'name email photo role');
@@ -556,12 +564,12 @@ router.delete('/:id', async (req, res) => {
 router.get('/stats/overview', async (req, res) => {
   try {
     const { sprint } = req.query;
-    let filter = {};
-    
+    let filter = { organizationId: req.organizationId };
+
     if (sprint) {
       filter['sprint.id'] = sprint;
     }
-    
+
     const stats = await Task.aggregate([
       { $match: filter },
       {
