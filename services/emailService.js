@@ -966,6 +966,80 @@ async function notifyTrialContactRequest(user, organization, phone, message) {
   });
 }
 
+// ─── Lead de registro nuevo que eligió pagar de una vez (fundador) ───────────
+const PLAN_INTEREST_LABELS = {
+  monthly: 'Mensual — $58.49/mes (10% off)',
+  quarterly: 'Trimestral — $159.99 (18% off + precio congelado de por vida)'
+};
+
+function planInterestHtml(user, organization, planInterest, phone) {
+  const planLabel = PLAN_INTEREST_LABELS[planInterest] || planInterest;
+  const bodyRows = `
+    <tr>
+      <td class="pad" style="padding:28px 28px 20px;">
+        <h1 style="margin:0 0 6px;font-size:20px;font-weight:800;color:${D.t0};">Nuevo registro quiere pagar de una vez</h1>
+        <p style="margin:0;font-size:14px;color:${D.t1};">Contactar cuanto antes para confirmar el pago y activar su precio fundador.</p>
+      </td>
+    </tr>
+    <tr>
+      <td class="pad" style="padding:0 28px 20px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+          style="background:${D.el};border:1px solid ${D.border2};border-radius:10px;overflow:hidden;">
+          <tr>
+            <td style="padding:12px 16px;border-bottom:1px solid ${D.border};">
+              <p style="margin:0;font-size:11px;color:${D.t2};text-transform:uppercase;letter-spacing:.6px;font-weight:700;">Contacto</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:14px 16px;">
+              <table width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};width:36%;font-weight:600;padding-bottom:8px;">Organización</td>
+                  <td style="font-size:13px;color:${D.t0};font-weight:700;padding-bottom:8px;">${esc(organization?.name || '—')}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;padding-bottom:8px;">Nombre</td>
+                  <td style="font-size:13px;color:${D.t0};font-weight:600;padding-bottom:8px;">${esc(user?.name || '—')}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;padding-bottom:8px;">Email</td>
+                  <td style="font-size:13px;color:${D.t0};padding-bottom:8px;"><a href="mailto:${esc(user?.email)}" style="color:${D.accent};text-decoration:none;">${esc(user?.email || '—')}</a></td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;padding-bottom:8px;">Teléfono</td>
+                  <td style="font-size:13px;color:${D.t0};font-weight:700;padding-bottom:8px;">${phone ? `<a href="tel:${esc(phone.replace(/[^\d+]/g,''))}" style="color:${D.t0};text-decoration:none;">${esc(phone)}</a>` : '—'}</td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;color:${D.t1};font-weight:600;vertical-align:top;">Plan elegido</td>
+                  <td style="font-size:13px;color:${D.t0};font-weight:700;">${esc(planLabel)}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    ${divRow()}
+    ${ctaRow(`mailto:${esc(user?.email)}`, 'Responder por correo &nbsp;→', D.accent)}
+  `;
+
+  return emailBase({
+    preheader: `${organization?.name || 'Un nuevo registro'} quiere pagar el plan ${planInterest} de una vez`,
+    headerRow: `<span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;">Lead · pago inmediato</span>`,
+    bodyRows,
+  });
+}
+
+async function notifyPlanInterest(user, organization, planInterest, phone) {
+  const supportEmail = process.env.SUPPORT_EMAIL || process.env.SMTP_USER;
+  if (!supportEmail) return;
+  await sendMail({
+    to: supportEmail,
+    subject: `🎯 Nuevo registro — ${organization?.name || user?.name || 'Organización'} quiere pagar ${planInterest === 'quarterly' ? 'Trimestral' : 'Mensual'} ya`,
+    html: planInterestHtml(user, organization, planInterest, phone),
+  });
+}
+
 module.exports = {
   sendMail,
   notifyTicketCreated,
@@ -976,5 +1050,6 @@ module.exports = {
   notifyTaskAssigned,
   notifyMentionEmail,
   notifyTrialContactRequest,
+  notifyPlanInterest,
 };
 

@@ -12,7 +12,7 @@ const qrcode = require('qrcode');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { generateToken, generateRefreshToken, authenticateToken, JWT_SECRET } = require('../middleware/auth');
-const { sendVerificationEmail, notifyTrialContactRequest } = require('../services/emailService');
+const { sendVerificationEmail, notifyTrialContactRequest, notifyPlanInterest } = require('../services/emailService');
 
 const router = express.Router();
 
@@ -180,7 +180,8 @@ router.post('/register', async (req, res) => {
 // ───── POST /register-org (Self-Service Onboarding) ─────
 router.post('/register-org', async (req, res) => {
   try {
-    const { orgName, userName, email, password, phone } = req.body;
+    const { orgName, userName, email, password, phone, planInterest } = req.body;
+    const validPlanInterest = ['monthly', 'quarterly'].includes(planInterest) ? planInterest : null;
 
     if (typeof orgName !== 'string' || typeof userName !== 'string'
         || typeof email !== 'string' || typeof password !== 'string'
@@ -237,7 +238,7 @@ router.post('/register-org', async (req, res) => {
       plan: 'free_trial',
       trialExpiresAt,
       createdBy: user._id,
-      contact: { email: normalizedEmail, phone: phoneTrimmed }, // para cross-selling
+      contact: { email: normalizedEmail, phone: phoneTrimmed, planInterest: validPlanInterest }, // para cross-selling
       limits: { maxUsers: 5, maxTasks: 50 }   // plan gratuito
     });
 
@@ -253,6 +254,14 @@ router.post('/register-org', async (req, res) => {
 
     // Send verification email
     await sendVerificationEmail(user, verificationToken, req);
+
+    // Si eligió pagar de una vez (mensual o trimestral) avisamos al equipo
+    // para contactarlo cuanto antes — no bloquea la respuesta si falla.
+    if (validPlanInterest) {
+      notifyPlanInterest(user, org, validPlanInterest, phoneTrimmed).catch(err =>
+        console.error('notifyPlanInterest error:', err.message)
+      );
+    }
 
     res.status(201).json({
       success: true,

@@ -46,7 +46,9 @@ const organizationSchema = new mongoose.Schema({
   contact: {
     email: { type: String, default: null },
     phone: { type: String, default: null },
-    country: { type: String, default: null }
+    country: { type: String, default: null },
+    // Plan que eligió pagar de una vez al registrarse (null = tomó el trial gratis)
+    planInterest: { type: String, enum: ['monthly', 'quarterly', null], default: null }
   },
   limits: {
     maxUsers:     { type: Number, default: 0 }, // 0 = ilimitado
