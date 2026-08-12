@@ -333,27 +333,47 @@ router.post('/webhook', async (req, res) => {
   try {
     const signature = req.headers['x-hub-signature-256'];
     const event = req.headers['x-github-event'];
-    
-    // Verificar firma (si hay secret configurado)
-    if (process.env.GITHUB_WEBHOOK_SECRET) {
-      const hmac = crypto.createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET);
+    const payload = req.body;
+
+    // Esta ruta no pasa por el middleware de organización (la llama GitHub,
+    // no un usuario logueado), así que antes buscaba la tarea por rama en
+    // TODA la base sin importar organización — si dos orgs tenían una rama
+    // con el mismo nombre (ej. "main"), una podía pisar la tarea de la otra.
+    // Resolvemos la organización a partir del board conectado a este repo.
+    const repoOwner = payload?.repository?.owner?.login;
+    const repoName = payload?.repository?.name;
+    if (!repoOwner || !repoName) {
+      return res.status(400).json({ error: 'Payload sin información de repositorio' });
+    }
+
+    const board = await Board.findByGitHubRepo(repoOwner, repoName);
+    if (!board) {
+      // Ningún board de ninguna organización está conectado a este repo.
+      return res.json({ message: 'No board connected to this repo' });
+    }
+
+    // Verificar firma con el secret propio del board; si no tiene uno
+    // guardado (setups viejos), caemos al secret global como antes.
+    const secret = board.github.webhookSecret || process.env.GITHUB_WEBHOOK_SECRET;
+    if (secret) {
+      const hmac = crypto.createHmac('sha256', secret);
       const digest = 'sha256=' + hmac.update(JSON.stringify(req.body)).digest('hex');
-      
+
       if (signature !== digest) {
         return res.status(401).json({ error: 'Invalid signature' });
       }
     }
-    
-    const payload = req.body;
-    
+
+    const organizationId = board.organizationId;
+
     // Manejar evento de push
     if (event === 'push') {
       const branch = payload.ref.replace('refs/heads/', '');
       const commits = payload.commits;
-      
-      // Buscar tarea por rama
-      const task = await Task.findByGitHubBranch(branch);
-      
+
+      // Buscar tarea por rama (scopeada a la organización dueña del board)
+      const task = await Task.findByGitHubBranch(branch, organizationId);
+
       if (task) {
         // Agregar commits a la tarea
         const newCommits = commits.map(c => ({
@@ -383,9 +403,9 @@ router.post('/webhook', async (req, res) => {
       const pr = payload.pull_request;
       const branch = pr.head.ref;
       
-      // Buscar tarea por rama
-      const task = await Task.findByGitHubBranch(branch);
-      
+      // Buscar tarea por rama (scopeada a la organización dueña del board)
+      const task = await Task.findByGitHubBranch(branch, organizationId);
+
       if (task) {
         // Actualizar info del PR
         task.github.pullRequest = githubService.formatPRForTask(pr);
