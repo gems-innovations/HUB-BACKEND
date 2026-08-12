@@ -222,9 +222,12 @@ router.get('/', authenticateToken, requireAgent, async (req, res) => {
 
 router.get('/my', authenticateToken, requireAgent, async (req, res) => {
   try {
+    // Sin límite, un agente con mucho historial traía TODA su bandeja en cada
+    // toggle a "Mi Bandeja" — tope razonable para no volverse un query sin fondo.
     const tickets = await Ticket.find({ organizationId: req.organizationId, assignedTo: req.user._id })
       .populate('submittedBy.userId', 'name email avatar')
-      .sort({ updatedAt: -1 });
+      .sort({ updatedAt: -1 })
+      .limit(200);
     res.json({ success: true, data: tickets });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

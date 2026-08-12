@@ -85,6 +85,13 @@ const ticketSchema = new mongoose.Schema({
 // ticketNumber es único dentro de cada organización (no global)
 ticketSchema.index({ organizationId: 1, ticketNumber: 1 }, { unique: true });
 
+// Sin estos índices, GET / y GET /my ordenaban/filtraban en memoria sobre
+// TODOS los tickets de la organización — se sentía cada vez más lento a
+// medida que crecía el volumen.
+ticketSchema.index({ organizationId: 1, createdAt: -1 });
+ticketSchema.index({ organizationId: 1, status: 1, createdAt: -1 });
+ticketSchema.index({ organizationId: 1, assignedTo: 1, updatedAt: -1 });
+
 // Middleware to generate ticket number before saving (per-organization sequence)
 ticketSchema.pre('save', async function(next) {
   if (this.isNew && !this.ticketNumber) {
