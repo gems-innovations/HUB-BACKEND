@@ -33,6 +33,15 @@ const ActivitySchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
   }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Quien creó la actividad
+  // Historial de cambios de campo — mismo patrón ya usado en Task.js, para
+  // que quede registro de quién cambió qué (fechas, asignado, prioridad, etc.)
+  history: [{
+    field: String,
+    oldValue: mongoose.Schema.Types.Mixed,
+    newValue: mongoose.Schema.Types.Mixed,
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    changedAt: { type: Date, default: Date.now }
+  }],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
@@ -42,5 +51,9 @@ ActivitySchema.pre('save', function(next) {
   this.updatedAt = new Date();
   next();
 });
+
+ActivitySchema.methods.logChange = function(field, oldValue, newValue, userId) {
+  this.history.push({ field, oldValue, newValue, changedBy: userId });
+};
 
 module.exports = mongoose.model('Activity', ActivitySchema);

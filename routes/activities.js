@@ -32,6 +32,38 @@ const commentImageUpload = multer({
   }
 });
 
+// Compara valores para el historial de cambios — un !== ingenuo marca como
+// "cambio" cualquier array (assignedTo) o Date reconstruido aunque el valor
+// real sea el mismo, así que arrays se comparan por contenido y fechas por
+// timestamp.
+function valuesEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const norm = (v) => (v || []).map(x => String(x?._id || x)).sort();
+    return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+  }
+  const aIsDate = a instanceof Date || (typeof a === 'string' && !isNaN(Date.parse(a)) && /^\d{4}-\d{2}-\d{2}/.test(a));
+  const bIsDate = b instanceof Date || (typeof b === 'string' && !isNaN(Date.parse(b)) && /^\d{4}-\d{2}-\d{2}/.test(b));
+  if (aIsDate && bIsDate) {
+    return new Date(a).getTime() === new Date(b).getTime();
+  }
+  return String(a ?? '') === String(b ?? '');
+}
+
+// Registra en activity.history los campos de `fields` cuyo valor en `updates`
+// difiera del actual — no persiste, solo llena el array; el caller hace .save().
+function logFieldChanges(activity, updates, fields, userId) {
+  fields.forEach(field => {
+    if (!(field in updates)) return
+    const oldValue = activity[field]
+    const newValue = updates[field]
+    if (!valuesEqual(oldValue, newValue)) {
+      activity.logChange(field, oldValue, newValue, userId)
+    }
+  });
+}
+
+const HISTORY_TRACKED_FIELDS = ['title', 'status', 'priority', 'date', 'dueDate', 'assignedTo', 'clientId', 'estimatedTime', 'completionPercentage', 'description'];
+
 // Crear nueva actividad
 router.post('/', authenticateToken, async (req, res) => {
   console.log('🚀 [ACTIVITIES] Iniciando creación de nueva actividad');
@@ -117,6 +149,7 @@ router.get('/', async (req, res) => {
       .populate('assignedTo', 'name email role photo avatar')
       .populate('createdBy', 'name email')
       .populate('comments.userId', 'name email photo')
+      .populate('history.changedBy', 'name email photo avatar')
       .sort({ createdAt: -1 });
 
     res.json(activities);
@@ -132,7 +165,8 @@ router.get('/:id', async (req, res) => {
       .populate('clientId', 'name email company')
       .populate('assignedTo', 'name email role photo avatar')
       .populate('createdBy', 'name email')
-      .populate('comments.userId', 'name email photo');
+      .populate('comments.userId', 'name email photo')
+      .populate('history.changedBy', 'name email photo avatar');
 
     if (!activity) {
       return res.status(404).json({ error: 'Actividad no encontrada' });
@@ -163,20 +197,28 @@ router.get('/assigned/:userId', async (req, res) => {
 // Actualizar actividad
 router.put('/:id', async (req, res) => {
   try {
-    const activity = await Activity.findByIdAndUpdate(
-      req.params.id, 
-      { ...req.body, updatedAt: new Date() }, 
-      { new: true }
-    )
-      .populate('clientId', 'name email company')
-      .populate('assignedTo', 'name email role photo avatar')
-      .populate('createdBy', 'name email');
-    
+    // Antes: findByIdAndUpdate sin filtrar por organizationId (cualquier
+    // usuario autenticado de CUALQUIER organización podía editar una
+    // actividad ajena si adivinaba el ID) y sin cargar el doc, así que no
+    // había forma de comparar valores para el historial. Ahora se carga,
+    // se registran los cambios, y se guarda con .save() (dispara los hooks).
+    const activity = await Activity.findOne({ _id: req.params.id, organizationId: req.organizationId });
     if (!activity) {
       return res.status(404).json({ error: 'Actividad no encontrada' });
     }
-    
-    res.json(activity);
+
+    const userId = req.user?._id || req.user?.id;
+    logFieldChanges(activity, req.body, HISTORY_TRACKED_FIELDS, userId);
+    Object.assign(activity, req.body);
+    await activity.save();
+
+    const populated = await Activity.findById(activity._id)
+      .populate('clientId', 'name email company')
+      .populate('assignedTo', 'name email role photo avatar')
+      .populate('createdBy', 'name email')
+      .populate('history.changedBy', 'name email photo avatar');
+
+    res.json(populated);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -187,11 +229,14 @@ router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     const activity = await Activity.findOne({ _id: req.params.id, organizationId: req.organizationId });
-    
+
     if (!activity) {
       return res.status(404).json({ error: 'Actividad no encontrada' });
     }
 
+    if (status !== activity.status) {
+      activity.logChange('status', activity.status, status, req.user?._id || req.user?.id);
+    }
     activity.status = status;
     activity.updatedAt = new Date();
 
@@ -210,11 +255,12 @@ router.patch('/:id/status', async (req, res) => {
     }
 
     await activity.save();
-    
+
     const populated = await Activity.findById(activity._id)
       .populate('clientId', 'name email company')
       .populate('assignedTo', 'name email role photo avatar')
-      .populate('createdBy', 'name email');
+      .populate('createdBy', 'name email')
+      .populate('history.changedBy', 'name email photo avatar');
 
     res.json(populated);
   } catch (error) {
@@ -235,18 +281,20 @@ router.patch('/:id/assign', authenticateToken, async (req, res) => {
       }
     }
 
-    const activity = await Activity.findByIdAndUpdate(
-      req.params.id,
-      { assignedTo, updatedAt: new Date() },
-      { new: true }
-    )
-      .populate('clientId', 'name email company')
-      .populate('assignedTo', 'name email role photo avatar')
-      .populate('createdBy', 'name email');
-    
-    if (!activity) {
+    const existing = await Activity.findOne({ _id: req.params.id, organizationId: req.organizationId });
+    if (!existing) {
       return res.status(404).json({ error: 'Actividad no encontrada' });
     }
+    logFieldChanges(existing, { assignedTo }, ['assignedTo'], req.user?._id || req.user?.id);
+    existing.assignedTo = assignedTo;
+    existing.updatedAt = new Date();
+    await existing.save();
+
+    const activity = await Activity.findById(existing._id)
+      .populate('clientId', 'name email company')
+      .populate('assignedTo', 'name email role photo avatar')
+      .populate('createdBy', 'name email')
+      .populate('history.changedBy', 'name email photo avatar');
 
     // Notificar nueva asignación
     notifyAssignment({
@@ -267,17 +315,21 @@ router.patch('/:id/assign', authenticateToken, async (req, res) => {
 router.patch('/:id/progress', async (req, res) => {
   try {
     const { completionPercentage } = req.body;
-    const activity = await Activity.findByIdAndUpdate(
-      req.params.id,
-      { completionPercentage, updatedAt: new Date() },
-      { new: true }
-    )
+    const activity = await Activity.findOne({ _id: req.params.id, organizationId: req.organizationId });
+    if (!activity) return res.status(404).json({ error: 'Actividad no encontrada' });
+
+    logFieldChanges(activity, { completionPercentage }, ['completionPercentage'], req.user?._id || req.user?.id);
+    activity.completionPercentage = completionPercentage;
+    activity.updatedAt = new Date();
+    await activity.save();
+
+    const populated = await Activity.findById(activity._id)
       .populate('clientId', 'name email company')
       .populate('assignedTo', 'name email role photo avatar')
-      .populate('createdBy', 'name email');
-    
-    if (!activity) return res.status(404).json({ error: 'Actividad no encontrada' });
-    res.json(activity);
+      .populate('createdBy', 'name email')
+      .populate('history.changedBy', 'name email photo avatar');
+
+    res.json(populated);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -296,28 +348,34 @@ router.post('/:id/timer', async (req, res) => {
       const isActive = activity.activeSessions.some(s => s.userId.toString() === userId);
       if (!isActive) {
         activity.activeSessions.push({ userId, startTime: new Date() });
+        activity.logChange('timer', 'detenido', 'iniciado', userId)
       }
     } else if (action === 'stop') {
       const sessionIndex = activity.activeSessions.findIndex(s => s.userId.toString() === userId);
       if (sessionIndex > -1) {
         const session = activity.activeSessions[sessionIndex];
         const elapsedSeconds = Math.floor((new Date() - session.startTime) / 1000);
-        activity.timeSpent = (activity.timeSpent || 0) + elapsedSeconds;
+        const before = activity.timeSpent || 0
+        activity.timeSpent = before + elapsedSeconds;
+        activity.logChange('timeSpent', before, activity.timeSpent, userId)
         activity.activeSessions.splice(sessionIndex, 1);
       }
     } else if (action === 'add_manual') {
       if (minutes && !isNaN(minutes)) {
-        activity.timeSpent = (activity.timeSpent || 0) + (parseInt(minutes) * 60);
+        const before = activity.timeSpent || 0
+        activity.timeSpent = before + (parseInt(minutes) * 60)
+        activity.logChange('timeSpent', before, activity.timeSpent, userId)
       }
     }
-    
+
     await activity.save();
-    
+
     const updatedActivity = await Activity.findById(activity._id)
       .populate('clientId', 'name email company')
       .populate('assignedTo', 'name email role photo avatar')
-      .populate('createdBy', 'name email');
-      
+      .populate('createdBy', 'name email')
+      .populate('history.changedBy', 'name email photo avatar');
+
     res.json(updatedActivity);
   } catch (error) {
     res.status(400).json({ error: error.message });
