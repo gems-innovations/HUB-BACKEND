@@ -80,7 +80,8 @@ router.post('/', authenticateToken, async (req, res) => {
       entityType: 'activity',
       entityId: activity._id,
       entityTitle: activity.title,
-      fromUserId: userId
+      fromUserId: userId,
+      organizationId: req.organizationId
     });
 
     console.log('✅ [ACTIVITIES] Activity saved with ID:', activity._id);
@@ -136,7 +137,7 @@ router.get('/', async (req, res) => {
     const { assignedTo, status } = req.query;
 
     // Construir filtros
-    let filter = {};
+    let filter = { organizationId: req.organizationId };
     if (assignedTo) {
       filter.assignedTo = { $in: [assignedTo] };
     }
@@ -302,7 +303,8 @@ router.patch('/:id/assign', authenticateToken, async (req, res) => {
       entityType: 'activity',
       entityId: activity._id,
       entityTitle: activity.title,
-      fromUserId: req.user?._id || req.user?.id
+      fromUserId: req.user?._id || req.user?.id,
+      organizationId: req.organizationId
     });
 
     res.json(activity);
@@ -433,7 +435,8 @@ router.post(
         entityType: 'activity',
         entityId: activity._id,
         entityTitle: activity.title,
-        fromUserId: userId
+        fromUserId: userId,
+        organizationId: req.organizationId
       });
       notifyMentionEmail({
         text,
@@ -448,7 +451,8 @@ router.post(
         entityId: activity._id,
         entityTitle: activity.title,
         fromUserId: userId,
-        snippet: text.slice(0, 80)
+        snippet: text.slice(0, 80),
+        organizationId: req.organizationId
       });
 
       const populated = await Activity.findById(activity._id)

@@ -43,13 +43,14 @@ async function resolveMentionedUserIds(text) {
  * Crea notificaciones de mención para cada usuario mencionado en el texto.
  * NOTA: permite auto-mención (útil para testing y para recordatorios personales).
  */
-async function notifyMentions({ text, entityType, entityId, entityTitle, fromUserId }) {
+async function notifyMentions({ text, entityType, entityId, entityTitle, fromUserId, organizationId }) {
   try {
     const userIds = await resolveMentionedUserIds(text);
     if (userIds.length === 0) return;
 
     const ops = userIds.map(uid => ({
       userId: uid,
+      organizationId,
       category: 'mention',
       entityType,
       entityId,
@@ -69,13 +70,14 @@ async function notifyMentions({ text, entityType, entityId, entityTitle, fromUse
 /**
  * Crea notificaciones de asignación (excluye al asignador para evitar auto-spam).
  */
-async function notifyAssignment({ assignedTo, entityType, entityId, entityTitle, fromUserId }) {
+async function notifyAssignment({ assignedTo, entityType, entityId, entityTitle, fromUserId, organizationId }) {
   try {
     const list = Array.isArray(assignedTo) ? assignedTo : [assignedTo];
     const ops = list
       .filter(uid => uid && String(uid) !== String(fromUserId))
       .map(uid => ({
         userId: uid,
+        organizationId,
         category: 'assignment',
         entityType,
         entityId,
@@ -94,12 +96,13 @@ async function notifyAssignment({ assignedTo, entityType, entityId, entityTitle,
 /**
  * Notifica a los demás asignados cuando se agrega un comentario nuevo (no mención).
  */
-async function notifyComment({ recipients, entityType, entityId, entityTitle, fromUserId, snippet }) {
+async function notifyComment({ recipients, entityType, entityId, entityTitle, fromUserId, snippet, organizationId }) {
   try {
     const ops = (recipients || [])
       .filter(uid => uid && String(uid) !== String(fromUserId))
       .map(uid => ({
         userId: uid,
+        organizationId,
         category: 'comment',
         entityType,
         entityId,

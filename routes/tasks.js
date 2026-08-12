@@ -202,7 +202,8 @@ router.post('/', checkTaskLimit, async (req, res) => {
       entityType: 'task',
       entityId: task._id,
       entityTitle: task.title,
-      fromUserId: userId
+      fromUserId: userId,
+      organizationId: req.organizationId
     });
 
     // Notificación por email a los asignados (sin await para no bloquear la respuesta)
@@ -332,7 +333,8 @@ router.post('/:id/comments', taskCommentImageUpload.array('images', 10), async (
       entityType: 'task',
       entityId: task._id,
       entityTitle: task.title,
-      fromUserId: userId
+      fromUserId: userId,
+      organizationId: req.organizationId
     });
     notifyMentionEmail({
       text,
@@ -347,7 +349,8 @@ router.post('/:id/comments', taskCommentImageUpload.array('images', 10), async (
       entityId: task._id,
       entityTitle: task.title,
       fromUserId: userId,
-      snippet: (text || '').slice(0, 80)
+      snippet: (text || '').slice(0, 80),
+      organizationId: req.organizationId
     });
 
     res.json(task);
