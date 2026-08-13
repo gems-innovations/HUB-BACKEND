@@ -252,16 +252,22 @@ router.post('/register-org', async (req, res) => {
       acceptedAt: new Date()
     });
 
-    // Send verification email
-    await sendVerificationEmail(user, verificationToken, req);
-
-    // Si eligió pagar de una vez (mensual o trimestral) avisamos al equipo
-    // para contactarlo cuanto antes — no bloquea la respuesta si falla.
-    if (validPlanInterest) {
-      notifyPlanInterest(user, org, validPlanInterest, phoneTrimmed).catch(err =>
-        console.error('notifyPlanInterest error:', err.message)
-      );
+    // Send verification email — si esto falla NO debe tumbar el registro:
+    // el usuario, la organización y la membership ya quedaron guardados en
+    // la base de datos, así que el contacto no se pierde aunque el correo
+    // de verificación falle (se puede reenviar después).
+    try {
+      await sendVerificationEmail(user, verificationToken, req);
+    } catch (mailErr) {
+      console.error('sendVerificationEmail error (registro ya se guardó, no se pierde):', mailErr.message);
     }
+
+    // Aviso interno SIEMPRE — trial o pago inmediato — para que ningún
+    // registro se quede sin seguimiento. No bloquea la respuesta si falla
+    // (notifyPlanInterest ya reintenta y deja todo el detalle en el log).
+    notifyPlanInterest(user, org, validPlanInterest || 'trial', phoneTrimmed).catch(err =>
+      console.error('notifyPlanInterest error inesperado:', err.message)
+    );
 
     res.status(201).json({
       success: true,

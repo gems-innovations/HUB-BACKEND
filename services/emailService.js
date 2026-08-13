@@ -966,19 +966,24 @@ async function notifyTrialContactRequest(user, organization, phone, message) {
   });
 }
 
-// ─── Lead de registro nuevo que eligió pagar de una vez (fundador) ───────────
+// ─── Aviso interno de CADA registro nuevo (trial o pago inmediato) ───────────
+// Nunca debe perderse un contacto: se manda SIEMPRE, no solo cuando elige
+// pagar — así el equipo se entera de cualquier registro aunque el lead de
+// pago no se detecte por algún motivo.
 const PLAN_INTEREST_LABELS = {
+  trial: 'Prueba gratis 14 días (sin descuento después)',
   monthly: 'Mensual — $58.49/mes (10% off)',
   quarterly: 'Trimestral — $159.99 (18% off + precio congelado de por vida)'
 };
 
 function planInterestHtml(user, organization, planInterest, phone) {
   const planLabel = PLAN_INTEREST_LABELS[planInterest] || planInterest;
+  const isPaidIntent = planInterest === 'monthly' || planInterest === 'quarterly';
   const bodyRows = `
     <tr>
       <td class="pad" style="padding:28px 28px 20px;">
-        <h1 style="margin:0 0 6px;font-size:20px;font-weight:800;color:${D.t0};">Nuevo registro quiere pagar de una vez</h1>
-        <p style="margin:0;font-size:14px;color:${D.t1};">Contactar cuanto antes para confirmar el pago y activar su precio fundador.</p>
+        <h1 style="margin:0 0 6px;font-size:20px;font-weight:800;color:${D.t0};">${isPaidIntent ? 'Nuevo registro quiere pagar de una vez' : 'Nuevo registro (prueba gratis)'}</h1>
+        <p style="margin:0;font-size:14px;color:${D.t1};">${isPaidIntent ? 'Contactar cuanto antes para confirmar el pago y activar su precio fundador.' : 'No pidió pagar todavía, pero vale la pena seguirle el rastro durante su prueba.'}</p>
       </td>
     </tr>
     <tr>
@@ -1024,20 +1029,57 @@ function planInterestHtml(user, organization, planInterest, phone) {
   `;
 
   return emailBase({
-    preheader: `${organization?.name || 'Un nuevo registro'} quiere pagar el plan ${planInterest} de una vez`,
-    headerRow: `<span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;">Lead · pago inmediato</span>`,
+    preheader: isPaidIntent
+      ? `${organization?.name || 'Un nuevo registro'} quiere pagar el plan ${planInterest} de una vez`
+      : `${organization?.name || 'Un nuevo registro'} empezó su prueba gratis de 14 días`,
+    headerRow: isPaidIntent
+      ? `<span style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;">Lead · pago inmediato</span>`
+      : `<span style="background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;padding:3px 12px;border-radius:20px;font-size:11px;font-weight:700;">Nuevo registro</span>`,
     bodyRows,
   });
 }
 
+// Reintenta una vez (el envío de correo es la única forma en que hoy nos
+// enteramos de un lead — un fallo transitorio de Resend no debe perder el
+// contacto). Si ambos intentos fallan, se deja todo el detalle en el log
+// para poder recuperarlo manualmente.
+async function sendWithRetry(sendFn, { label, details }) {
+  try {
+    await sendFn();
+  } catch (firstErr) {
+    console.warn(`${label}: primer intento falló (${firstErr.message}), reintentando en 2s...`);
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      await sendFn();
+    } catch (secondErr) {
+      console.error(`${label}: FALLÓ tras reintento — contacto en riesgo de perderse. Detalle:`, JSON.stringify(details || {}));
+      console.error(secondErr);
+    }
+  }
+}
+
 async function notifyPlanInterest(user, organization, planInterest, phone) {
   const supportEmail = process.env.SUPPORT_EMAIL || process.env.SMTP_USER;
-  if (!supportEmail) return;
-  await sendMail({
-    to: supportEmail,
-    subject: `🎯 Nuevo registro — ${organization?.name || user?.name || 'Organización'} quiere pagar ${planInterest === 'quarterly' ? 'Trimestral' : 'Mensual'} ya`,
-    html: planInterestHtml(user, organization, planInterest, phone),
-  });
+  const label = planInterest === 'quarterly' ? 'Trimestral' : planInterest === 'monthly' ? 'Mensual' : 'Prueba gratis';
+  const details = {
+    org: organization?.name,
+    user: user?.name,
+    email: user?.email,
+    phone,
+    plan: label
+  };
+  if (!supportEmail) {
+    console.error('notifyPlanInterest: SUPPORT_EMAIL/SMTP_USER no configurado — no se pudo avisar al equipo. Contacto:', JSON.stringify(details));
+    return;
+  }
+  await sendWithRetry(
+    () => sendMail({
+      to: supportEmail,
+      subject: `${planInterest === 'monthly' || planInterest === 'quarterly' ? '🎯' : '📋'} Nuevo registro — ${organization?.name || user?.name || 'Organización'} · ${label}`,
+      html: planInterestHtml(user, organization, planInterest, phone),
+    }),
+    { label: 'notifyPlanInterest', details }
+  );
 }
 
 module.exports = {
