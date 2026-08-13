@@ -16,6 +16,35 @@ const { sendVerificationEmail, notifyTrialContactRequest, notifyPlanInterest } =
 
 const router = express.Router();
 
+// ───── DEBUG TEMPORAL: diagnosticar por qué no llegan los correos en prod ─────
+// Se quita apenas terminemos de diagnosticar.
+router.get('/_debug-email-test', async (req, res) => {
+  const apiKey = process.env.RESEND_API_KEY || process.env.SMTP_PASS;
+  const supportEmail = process.env.SUPPORT_EMAIL || process.env.SMTP_USER;
+  const diag = {
+    hasApiKey: !!apiKey,
+    apiKeyPrefix: apiKey ? apiKey.slice(0, 6) : null,
+    hasSupportEmail: !!supportEmail,
+    supportEmail,
+    emailFrom: process.env.EMAIL_FROM || null,
+    nodeEnv: process.env.NODE_ENV
+  };
+  try {
+    const { Resend } = require('resend');
+    const resend = new Resend(apiKey);
+    const from = process.env.EMAIL_FROM || 'GEMS Hub <info@gemsinnovations.com>';
+    const result = await resend.emails.send({
+      from,
+      to: supportEmail,
+      subject: '🔧 Debug prod — diagnóstico de envío',
+      html: '<p>Prueba desde el endpoint de diagnóstico en el servidor real.</p>'
+    });
+    return res.json({ ...diag, sendResult: result });
+  } catch (err) {
+    return res.json({ ...diag, threw: true, errorMessage: err.message, errorName: err.name, stack: err.stack });
+  }
+});
+
 // ───── Dispositivos de confianza (2FA) ─────
 const TRUSTED_DEVICE_DAYS = 30;
 
